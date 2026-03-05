@@ -86,13 +86,4 @@ Open:
 5. Run `Run All`.
 6. Review outputs from `Latest Run Outputs` (CSV/charts/report/screenshots).
 
-## GitHub Publish
 
-If not yet pushed:
-
-```powershell
-git init
-git add .
-git commit -m "Initial Autodesk CFD automation web console"
-gh repo create <new-repo-name> --public --source . --remote origin --push
-```
