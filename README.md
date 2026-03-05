@@ -6,6 +6,8 @@ This project is a local web app and automation framework for Autodesk CFD that p
 - Direct CFD scripting execution via `CFD.exe -script`.
 - Study introspection (design/scenario/BC/material/part discovery).
 - Natural language to `cases.csv` generation (Ollama or Groq provider).
+- LLM mesh intelligence (`mesh.default_params` + quality gate suggestions).
+- Pre-solve mesh quality gating (skewness, aspect ratio, orthogonality, element count sanity).
 - Automatic retries on failed cases.
 - Live log streaming into dashboard during active case execution.
 - Run modes:
@@ -76,6 +78,7 @@ Set your `.cfdst` path in either way:
 - `POST /api/cases`: save cases CSV.
 - `POST /api/introspect`: inspect current study via Autodesk CFD API.
 - `POST /api/llm/generate-cases`: generate case matrix from natural language (`apply=true` to persist).
+- `POST /api/llm/suggest-mesh`: suggest mesh defaults + mesh gate thresholds (`apply=true` to persist).
 - `POST /api/run`: start run (`mode`: `all|failed|changed`).
 - `GET /api/status`: live status/logs.
 - `GET /api/latest-run`: latest run summary.
@@ -90,6 +93,51 @@ Set your `.cfdst` path in either way:
 - To force actual solves, set:
   - `solve.enabled: true`
   - optional `force_solve=true` in specific case rows.
+
+## Mesh Intelligence Layer (v2.1)
+
+### LLM-Suggested Mesh Parameters
+
+Use **Mesh Intelligence (v2.1)** panel in web console to generate:
+
+- `mesh.default_params.target_y_plus`
+- `mesh.default_params.inflation_layers`
+- `mesh.default_params.max_element_size_m`
+- `mesh.default_params.min_element_size_m`
+- `mesh.default_params.refinement_zones`
+- optional `mesh.quality_gate` threshold updates
+
+Click **Suggest Mesh Params** for preview or **Suggest + Apply To Config** to save into `study_config.yaml`.
+
+### Post-Mesh Quality Gate
+
+Before solve, `scripts/cfd_case_runner.py` evaluates mesh quality gate using available metrics:
+
+- `skewness <= skewness_max`
+- `aspect_ratio <= aspect_ratio_max`
+- `orthogonality >= orthogonality_min`
+- `element_count_min <= element_count <= element_count_max`
+
+If a check fails, solve is skipped and case fails early with `failure_type=bad_mesh`.
+
+Optional case-row overrides (for explicit control/testing):
+
+- `mesh_skewness`
+- `mesh_aspect_ratio`
+- `mesh_orthogonality`
+- `mesh_element_count`
+- `mesh_max_element_size_m`
+- `mesh_min_element_size_m`
+- `mesh_inflation_layers`
+- `mesh_target_y_plus`
+
+### Smarter Retry Logic
+
+Retries are now failure-mode aware:
+
+- `mesh_failure` or `solver_divergence`: retry with mesh adjustment (`coarsen`/`refine` strategy from `mesh.retry`).
+- `script_failure`: retry as-is (same mesh settings).
+- Other failures: retry with standard behavior.
 
 ## LLM Case Builder
 
@@ -139,8 +187,15 @@ A case is marked `failed` when any of these occurs:
 - CFD script process non-zero exit.
 - Python exception inside `scripts/cfd_case_runner.py`.
 - No usable results/summary available for post-processing.
+- Mesh quality gate failure before solve (`bad_mesh`).
 
-Failure reason is stored in `failure_reason` and shown in:
+Failure diagnosis is stored in:
+
+- `failure_type` (`timeout | non_zero_exit | python_exception | no_results | bad_mesh`)
+- `failure_mode` (`mesh_failure | solver_divergence | script_failure | generic_failure`)
+- `failure_reason`
+
+These are shown in:
 
 - Dashboard results table.
 - Dashboard "Failure Reasons" section.
@@ -173,7 +228,7 @@ Optional protection:
 2. Restart server.
 3. Use the top-right API key field in the web console (sent as `X-API-Key`).
 
-When enabled, mutating endpoints (`POST /api/config`, `POST /api/cases`, `POST /api/introspect`, `POST /api/run`) require the key.
+When enabled, mutating endpoints (`POST /api/config`, `POST /api/cases`, `POST /api/introspect`, `POST /api/run`, `POST /api/llm/generate-cases`, `POST /api/llm/suggest-mesh`) require the key.
 
 ## Example Workflow
 

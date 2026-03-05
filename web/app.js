@@ -24,6 +24,10 @@ const ui = {
   llmPreviewBtn: document.getElementById("llmPreviewBtn"),
   llmApplyBtn: document.getElementById("llmApplyBtn"),
   llmResult: document.getElementById("llmResult"),
+  meshPrompt: document.getElementById("meshPrompt"),
+  meshSuggestBtn: document.getElementById("meshSuggestBtn"),
+  meshApplyBtn: document.getElementById("meshApplyBtn"),
+  meshResult: document.getElementById("meshResult"),
   studyPathInput: document.getElementById("studyPathInput"),
   discoverStudiesBtn: document.getElementById("discoverStudiesBtn"),
   applyStudyPathBtn: document.getElementById("applyStudyPathBtn"),
@@ -106,7 +110,9 @@ function renderLiveFailures(items) {
   for (const item of latest) {
     const div = document.createElement("div");
     div.className = "failure-item";
-    div.textContent = `${item.case_id} (attempt ${item.attempt}): ${item.reason || "Unknown failure"}`;
+    const typeText = item.failure_type ? `[${item.failure_type}] ` : "";
+    const modeText = item.failure_mode ? ` (${item.failure_mode})` : "";
+    div.textContent = `${item.case_id} (attempt ${item.attempt}) ${typeText}${item.reason || "Unknown failure"}${modeText}`;
     ui.liveFailureWrap.appendChild(div);
   }
 }
@@ -143,7 +149,7 @@ function renderResultsTable(summary) {
     const metrics = row.metrics || {};
     Object.keys(metrics).forEach((key) => metricKeys.add(key));
   }
-  const columns = ["case_id", "success", "failure_reason", ...Array.from(metricKeys)];
+  const columns = ["case_id", "success", "failure_type", "failure_reason", ...Array.from(metricKeys)];
 
   const table = document.createElement("table");
   const thead = document.createElement("thead");
@@ -163,6 +169,8 @@ function renderResultsTable(summary) {
       const td = document.createElement("td");
       if (column === "success") {
         td.textContent = row.success ? "true" : "false";
+      } else if (column === "failure_type") {
+        td.textContent = row.failure_type || "";
       } else if (column === "failure_reason") {
         td.textContent = row.failure_reason || row.error || "";
       } else if (column in row) {
@@ -193,7 +201,8 @@ function renderFailureDetails(summary) {
     const div = document.createElement("div");
     div.className = "failure-item";
     const reason = row.failure_reason || row.error || "Unknown failure";
-    div.textContent = `${row.case_id}: ${reason}`;
+    const typeText = row.failure_type ? ` [${row.failure_type}]` : "";
+    div.textContent = `${row.case_id}${typeText}: ${reason}`;
     ui.failureWrap.appendChild(div);
   }
 }
@@ -317,6 +326,43 @@ async function generateCasesFromPrompt(apply) {
   ui.casesText.value = payload.csv || ui.casesText.value;
   renderLlmResult(payload, apply);
   flash(`LLM generated ${payload.row_count || 0} row(s).`);
+}
+
+function renderMeshSuggestion(payload, apply) {
+  const lines = [];
+  lines.push(`Provider: ${payload.provider || "-"}`);
+  lines.push(`Model: ${payload.model || "-"}`);
+  lines.push(`Applied to config: ${apply ? "yes" : "no"}`);
+  lines.push("");
+  lines.push("Mesh Parameters:");
+  lines.push(JSON.stringify(payload.mesh_params || {}, null, 2));
+  lines.push("");
+  lines.push("Quality Gate:");
+  lines.push(JSON.stringify(payload.quality_gate || {}, null, 2));
+  if (payload.notes) {
+    lines.push("");
+    lines.push("Notes:");
+    lines.push(payload.notes);
+  }
+  ui.meshResult.textContent = lines.join("\n");
+}
+
+async function suggestMeshWithLlm(apply) {
+  const prompt = (ui.meshPrompt.value || "").trim();
+  const payload = await callApi("/api/llm/suggest-mesh", {
+    method: "POST",
+    body: JSON.stringify({
+      prompt,
+      apply,
+    }),
+  });
+  renderMeshSuggestion(payload, apply);
+  if (apply && payload.config) {
+    currentConfig = payload.config;
+    ui.configText.value = JSON.stringify(payload.config, null, 2);
+    updateSolveBanner();
+  }
+  flash(`LLM mesh suggestion generated${apply ? " and applied" : ""}.`);
 }
 
 async function discoverStudies() {
@@ -472,6 +518,24 @@ ui.llmApplyBtn.addEventListener("click", async () => {
   } catch (err) {
     flash(`LLM apply failed: ${err.message}`);
     ui.llmResult.textContent = `LLM apply failed: ${err.message}`;
+  }
+});
+
+ui.meshSuggestBtn.addEventListener("click", async () => {
+  try {
+    await suggestMeshWithLlm(false);
+  } catch (err) {
+    flash(`Mesh suggestion failed: ${err.message}`);
+    ui.meshResult.textContent = `Mesh suggestion failed: ${err.message}`;
+  }
+});
+
+ui.meshApplyBtn.addEventListener("click", async () => {
+  try {
+    await suggestMeshWithLlm(true);
+  } catch (err) {
+    flash(`Mesh apply failed: ${err.message}`);
+    ui.meshResult.textContent = `Mesh apply failed: ${err.message}`;
   }
 });
 

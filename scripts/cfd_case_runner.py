@@ -36,6 +36,24 @@ def parse_scalar(value):
         return text
 
 
+def to_float_or_none(value):
+    if value in ("", None):
+        return None
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return None
+
+
+def to_int_or_none(value):
+    if value in ("", None):
+        return None
+    try:
+        return int(round(float(str(value).strip())))
+    except Exception:
+        return None
+
+
 def normalize_path(path):
     return str(Path(path)).replace("\\", "/")
 
@@ -273,6 +291,182 @@ def apply_solver_overrides(scenario, overrides, messages, warnings):
             warnings.append(f"Could not apply solver override {key}: {ex}")
 
 
+def dump_properties(obj):
+    prop_defs = S.PropertyDefinitionList()
+    values = S.VariantList()
+    output = []
+    try:
+        obj.properties(prop_defs, values)
+    except Exception:
+        return output
+    count = min(len(prop_defs), len(values))
+    for idx in range(count):
+        definition = prop_defs[idx]
+        variant = values[idx]
+        _, value = variant_to_python(variant)
+        output.append(
+            {
+                "name": str(definition.name()),
+                "value": value,
+            }
+        )
+    return output
+
+
+def find_numeric_metric(prop_rows, tokens):
+    for row in prop_rows:
+        name = str(row.get("name", "")).strip().lower()
+        if not all(token in name for token in tokens):
+            continue
+        value = to_float_or_none(row.get("value"))
+        if value is not None:
+            return value
+    return None
+
+
+def collect_mesh_quality_metrics(scenario, case_row, messages):
+    metrics = {
+        "skewness": to_float_or_none(case_row.get("mesh_skewness")),
+        "aspect_ratio": to_float_or_none(case_row.get("mesh_aspect_ratio")),
+        "orthogonality": to_float_or_none(case_row.get("mesh_orthogonality")),
+        "element_count": to_int_or_none(case_row.get("mesh_element_count")),
+    }
+
+    if all(value is not None for value in metrics.values()):
+        messages.append("Mesh quality metrics loaded from case row overrides.")
+        return metrics
+
+    props = dump_properties(scenario)
+    if props:
+        if metrics["skewness"] is None:
+            metrics["skewness"] = find_numeric_metric(props, ["skew"])
+        if metrics["aspect_ratio"] is None:
+            metrics["aspect_ratio"] = find_numeric_metric(props, ["aspect", "ratio"])
+        if metrics["orthogonality"] is None:
+            metrics["orthogonality"] = find_numeric_metric(props, ["orthogon"])
+        if metrics["element_count"] is None:
+            element_count = find_numeric_metric(props, ["element", "count"])
+            metrics["element_count"] = int(element_count) if element_count is not None else None
+
+    return metrics
+
+
+def evaluate_mesh_quality(metrics, gate_cfg):
+    gate = gate_cfg if isinstance(gate_cfg, dict) else {}
+    if not bool(gate.get("enabled", True)):
+        return {
+            "enabled": False,
+            "passed": True,
+            "failed_checks": [],
+            "missing_metrics": [],
+            "metrics": metrics,
+        }
+
+    checks = [
+        ("skewness", "<=", to_float_or_none(gate.get("skewness_max"))),
+        ("aspect_ratio", "<=", to_float_or_none(gate.get("aspect_ratio_max"))),
+        ("orthogonality", ">=", to_float_or_none(gate.get("orthogonality_min"))),
+        ("element_count", ">=", to_float_or_none(gate.get("element_count_min"))),
+        ("element_count", "<=", to_float_or_none(gate.get("element_count_max"))),
+    ]
+    require_all = bool(gate.get("require_all_metrics", False))
+    failed_checks = []
+    missing = []
+    for metric_name, operator, threshold in checks:
+        if threshold is None:
+            continue
+        value = metrics.get(metric_name)
+        if value is None:
+            missing.append(metric_name)
+            continue
+        if operator == "<=" and not (float(value) <= float(threshold)):
+            failed_checks.append(f"{metric_name}={value} exceeds threshold={threshold}")
+        if operator == ">=" and not (float(value) >= float(threshold)):
+            failed_checks.append(f"{metric_name}={value} below threshold={threshold}")
+
+    if require_all and missing:
+        for metric_name in sorted(set(missing)):
+            failed_checks.append(f"{metric_name} missing while require_all_metrics=true")
+
+    return {
+        "enabled": True,
+        "passed": len(failed_checks) == 0,
+        "failed_checks": failed_checks,
+        "missing_metrics": sorted(set(missing)),
+        "metrics": metrics,
+    }
+
+
+def resolve_mesh_params(config, case_row, mesh_adjustment):
+    mesh_cfg = config.get("mesh", {})
+    defaults = mesh_cfg.get("default_params", {}) if isinstance(mesh_cfg, dict) else {}
+    params = {
+        "max_element_size_m": to_float_or_none(case_row.get("mesh_max_element_size_m")),
+        "min_element_size_m": to_float_or_none(case_row.get("mesh_min_element_size_m")),
+        "inflation_layers": to_int_or_none(case_row.get("mesh_inflation_layers")),
+        "target_y_plus": to_float_or_none(case_row.get("mesh_target_y_plus")),
+        "refinement_zones": case_row.get("mesh_refinement_zones", ""),
+    }
+
+    if params["max_element_size_m"] is None:
+        params["max_element_size_m"] = to_float_or_none(defaults.get("max_element_size_m"))
+    if params["min_element_size_m"] is None:
+        params["min_element_size_m"] = to_float_or_none(defaults.get("min_element_size_m"))
+    if params["inflation_layers"] is None:
+        params["inflation_layers"] = to_int_or_none(defaults.get("inflation_layers"))
+    if params["target_y_plus"] is None:
+        params["target_y_plus"] = to_float_or_none(defaults.get("target_y_plus"))
+
+    if params["refinement_zones"] in ("", None):
+        params["refinement_zones"] = defaults.get("refinement_zones", [])
+
+    adjustment = mesh_adjustment if isinstance(mesh_adjustment, dict) else {}
+    size_scale = to_float_or_none(adjustment.get("size_scale"))
+    inflation_delta = to_int_or_none(adjustment.get("inflation_layer_delta"))
+    if size_scale is not None:
+        if params["max_element_size_m"] is not None:
+            params["max_element_size_m"] = float(params["max_element_size_m"]) * size_scale
+        if params["min_element_size_m"] is not None:
+            params["min_element_size_m"] = float(params["min_element_size_m"]) * size_scale
+    if inflation_delta is not None and params["inflation_layers"] is not None:
+        params["inflation_layers"] = max(1, int(params["inflation_layers"]) + inflation_delta)
+
+    return params
+
+
+def try_set_aliases(target, aliases, value):
+    for alias in aliases:
+        try:
+            set_object_property(target, alias, value)
+            return alias
+        except Exception:
+            continue
+    return ""
+
+
+def apply_mesh_overrides(scenario, mesh_params, messages, warnings):
+    if not isinstance(mesh_params, dict):
+        return
+    alias_map = {
+        "max_element_size_m": ["maxElementSize", "meshMaxElementSize", "globalElementSize"],
+        "min_element_size_m": ["minElementSize", "meshMinElementSize"],
+        "inflation_layers": ["inflationLayers", "boundaryLayerCount", "nInflationLayers"],
+        "target_y_plus": ["targetYPlus", "yPlus", "wallYPlus"],
+    }
+    for key, aliases in alias_map.items():
+        value = mesh_params.get(key)
+        if value in ("", None):
+            continue
+        used = try_set_aliases(scenario, aliases, value)
+        if used:
+            messages.append(f"Applied mesh parameter {key}={value} via property '{used}'.")
+        else:
+            warnings.append(
+                f"Could not apply mesh parameter '{key}' using aliases {aliases}. "
+                "Scenario API may expose different property names."
+            )
+
+
 def parse_summary_value(raw_value, requested_unit):
     unit = requested_unit or ""
     numeric = None
@@ -476,6 +670,7 @@ def main():
 
     case = payload.get("case", {})
     config = payload.get("config", {})
+    mesh_adjustment = payload.get("mesh_adjustment", {})
     case_dir = Path(payload.get("case_dir", ".")).resolve()
     case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -496,6 +691,10 @@ def main():
         "cutplanes": [],
         "summary_csv": str(summary_csv),
         "metrics_csv": str(metrics_csv),
+        "mesh_adjustment": mesh_adjustment if isinstance(mesh_adjustment, dict) else {},
+        "mesh_params_used": {},
+        "mesh_quality": {},
+        "failure_type": "",
     }
 
     try:
@@ -536,6 +735,26 @@ def main():
             result["warnings"],
         )
 
+        mesh_params = resolve_mesh_params(config, case, mesh_adjustment)
+        result["mesh_params_used"] = mesh_params
+        apply_mesh_overrides(scenario, mesh_params, result["messages"], result["warnings"])
+
+        mesh_quality = evaluate_mesh_quality(
+            collect_mesh_quality_metrics(scenario, case, result["messages"]),
+            config.get("mesh", {}).get("quality_gate", {}),
+        )
+        result["mesh_quality"] = mesh_quality
+        if mesh_quality.get("enabled"):
+            result["messages"].append(
+                "Mesh gate evaluated: "
+                + ("PASS" if mesh_quality.get("passed") else "FAIL")
+                + f", failed_checks={len(mesh_quality.get('failed_checks', []))}, "
+                + f"missing_metrics={len(mesh_quality.get('missing_metrics', []))}"
+            )
+        if not mesh_quality.get("passed", True):
+            result["failure_type"] = "bad_mesh"
+            raise RuntimeError("Mesh quality gate failed before solve.")
+
         try:
             study.save()
             result["messages"].append("Study changes saved.")
@@ -555,6 +774,7 @@ def main():
             result["messages"].append("Solve disabled in config.")
 
         if not bool(scenario.hasResults):
+            result["failure_type"] = "no_results"
             raise RuntimeError("Scenario has no results to post-process.")
 
         _, metrics = extract_summary_and_metrics(
@@ -588,6 +808,8 @@ def main():
 
         result["success"] = True
     except Exception as ex:
+        if not result.get("failure_type"):
+            result["failure_type"] = "python_exception"
         result["error"] = str(ex)
         result["traceback"] = traceback.format_exc()
 

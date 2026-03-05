@@ -115,6 +115,15 @@ class AutomationRunner:
     def _derive_failure_reason(case_result: dict[str, Any], run_info: dict[str, Any]) -> str:
         if case_result.get("success"):
             return ""
+        if str(case_result.get("failure_type", "")).strip().lower() == "bad_mesh":
+            mesh_quality = case_result.get("mesh_quality", {})
+            if isinstance(mesh_quality, dict):
+                checks = mesh_quality.get("failed_checks", [])
+                if isinstance(checks, list) and checks:
+                    return "Mesh quality gate failed: " + "; ".join(str(item) for item in checks[:4])
+            if case_result.get("error"):
+                return str(case_result.get("error"))
+            return "Mesh quality gate failed."
         if case_result.get("failure_reason"):
             return str(case_result.get("failure_reason"))
         if case_result.get("error"):
@@ -135,6 +144,127 @@ class AutomationRunner:
         return "Case failed for an unspecified reason."
 
     @staticmethod
+    def _classify_failure_type(case_result: dict[str, Any], run_info: dict[str, Any]) -> str:
+        if case_result.get("success"):
+            return ""
+        declared = str(case_result.get("failure_type", "")).strip().lower()
+        if declared in {"timeout", "non_zero_exit", "python_exception", "no_results", "bad_mesh"}:
+            return declared
+
+        if str(case_result.get("error", "")).strip().lower().find("mesh quality") >= 0:
+            return "bad_mesh"
+        if run_info.get("timed_out"):
+            return "timeout"
+
+        log_text = str(run_info.get("log_text", "") or "")
+        if "ERROR in Python script" in log_text or case_result.get("traceback"):
+            return "python_exception"
+
+        err_text = str(case_result.get("error", "")).strip().lower()
+        if "no results" in err_text:
+            return "no_results"
+
+        returncode = run_info.get("returncode")
+        if returncode not in (None, 0):
+            return "non_zero_exit"
+
+        stderr = str(run_info.get("stderr", "")).strip()
+        if stderr:
+            return "non_zero_exit"
+
+        return "non_zero_exit"
+
+    @staticmethod
+    def _classify_failure_mode(case_result: dict[str, Any], failure_type: str) -> str:
+        failure_type = str(failure_type or "").strip().lower()
+        if failure_type == "bad_mesh":
+            return "mesh_failure"
+        if failure_type == "python_exception":
+            return "script_failure"
+
+        text = " ".join(
+            [
+                str(case_result.get("error", "")),
+                str(case_result.get("failure_reason", "")),
+                str(case_result.get("driver", {}).get("stderr", "")),
+            ]
+        ).lower()
+        divergence_tokens = [
+            "diverg",
+            "residual",
+            "not converg",
+            "nan",
+            "floating point",
+            "matrix singular",
+        ]
+        if any(token in text for token in divergence_tokens):
+            return "solver_divergence"
+        return "generic_failure"
+
+    @staticmethod
+    def _build_mesh_adjustment(config: dict[str, Any], direction: str) -> dict[str, Any]:
+        mesh_retry_cfg = (
+            config.get("mesh", {}).get("retry", {})
+            if isinstance(config.get("mesh", {}), dict)
+            else {}
+        )
+        if direction == "refine":
+            size_scale = float(mesh_retry_cfg.get("refine_size_scale", 0.75) or 0.75)
+            inflation_delta = int(mesh_retry_cfg.get("refine_inflation_delta", 1) or 1)
+        else:
+            size_scale = float(mesh_retry_cfg.get("coarsen_size_scale", 1.35) or 1.35)
+            inflation_delta = int(mesh_retry_cfg.get("coarsen_inflation_delta", -1) or -1)
+        return {
+            "direction": direction,
+            "size_scale": size_scale,
+            "inflation_layer_delta": inflation_delta,
+        }
+
+    def _plan_retry(
+        self,
+        *,
+        failure_type: str,
+        failure_mode: str,
+        config: dict[str, Any],
+        attempt: int,
+        max_attempts: int,
+        mesh_strategy_index: int,
+    ) -> tuple[bool, dict[str, Any] | None, int, str]:
+        if attempt >= max_attempts:
+            return False, None, mesh_strategy_index, ""
+
+        mesh_cfg = config.get("mesh", {}) if isinstance(config.get("mesh", {}), dict) else {}
+        mesh_retry_cfg = mesh_cfg.get("retry", {}) if isinstance(mesh_cfg.get("retry", {}), dict) else {}
+        mesh_retry_enabled = bool(mesh_retry_cfg.get("enabled", True))
+        strategy = mesh_retry_cfg.get("strategy", ["coarsen", "refine"])
+        if not isinstance(strategy, list) or not strategy:
+            strategy = ["coarsen", "refine"]
+        directions = [str(item).strip().lower() for item in strategy if str(item).strip()]
+        if not directions:
+            directions = ["coarsen", "refine"]
+
+        if mesh_retry_enabled and failure_mode in {"mesh_failure", "solver_divergence"}:
+            direction = directions[mesh_strategy_index % len(directions)]
+            if direction not in {"coarsen", "refine"}:
+                direction = "coarsen"
+            adjustment = self._build_mesh_adjustment(config, direction)
+            note = (
+                "Mesh-aware retry: "
+                + (
+                    "mesh quality failure"
+                    if failure_mode == "mesh_failure"
+                    else "solver divergence detected"
+                )
+                + f", applying {direction} mesh adjustment."
+            )
+            return True, adjustment, mesh_strategy_index + 1, note
+
+        if failure_mode == "script_failure":
+            return True, None, mesh_strategy_index, "Script failure retry: keeping same mesh settings."
+
+        return True, None, mesh_strategy_index, f"Retrying after failure_type={failure_type}."
+
+    @staticmethod
     def _dry_run_case_result(
         *,
         case: dict[str, Any],
@@ -152,6 +282,19 @@ class AutomationRunner:
                 continue
 
         force_fail = str(case.get("force_fail", "")).strip().lower() in {"1", "true", "yes", "on"}
+        force_fail_type = str(case.get("force_fail_type", "")).strip().lower()
+        if force_fail_type and force_fail_type not in {
+            "timeout",
+            "non_zero_exit",
+            "python_exception",
+            "no_results",
+            "bad_mesh",
+            "solver_divergence",
+            "script_failure",
+        }:
+            force_fail_type = ""
+        if force_fail_type:
+            force_fail = True
         result = {
             "case_id": case_id,
             "run_id": run_id,
@@ -164,7 +307,28 @@ class AutomationRunner:
             "cutplanes": [],
         }
         if force_fail:
-            result["error"] = "Dry-run forced failure via case column force_fail=true."
+            if force_fail_type in {"solver_divergence"}:
+                result["failure_type"] = "non_zero_exit"
+                result["error"] = "Dry-run forced failure: solver divergence detected."
+            elif force_fail_type in {"script_failure"}:
+                result["failure_type"] = "python_exception"
+                result["error"] = "Dry-run forced failure: script error."
+            elif force_fail_type in {"timeout", "non_zero_exit", "python_exception", "no_results", "bad_mesh"}:
+                result["failure_type"] = force_fail_type
+                if force_fail_type == "bad_mesh":
+                    result["error"] = "Dry-run forced failure: mesh quality gate failed."
+                    result["mesh_quality"] = {
+                        "passed": False,
+                        "failed_checks": ["skewness=0.99 exceeds threshold=0.95"],
+                        "missing_metrics": [],
+                    }
+                elif force_fail_type == "no_results":
+                    result["error"] = "Dry-run forced failure: no results available for post-processing."
+                else:
+                    result["error"] = f"Dry-run forced failure: {force_fail_type}."
+            else:
+                result["failure_type"] = "non_zero_exit"
+                result["error"] = "Dry-run forced failure via case column force_fail=true."
         return result
 
     def _emit(self, progress: ProgressFn | None, **event: Any) -> None:
@@ -303,6 +467,7 @@ class AutomationRunner:
 
         timeout_seconds = int((cfg.get("automation", {}).get("timeout_minutes", 120) or 120) * 60)
         max_retries = int(cfg.get("automation", {}).get("max_retries", 1) or 1)
+        max_attempts = max_retries + 1
         state = self._load_state()
 
         selected_cases = self._select_cases(mode=mode, cases=cases, config=cfg, state=state)
@@ -335,7 +500,9 @@ class AutomationRunner:
             )
 
             last_result: dict[str, Any] | None = None
-            for attempt in range(1, max_retries + 2):
+            mesh_strategy_index = 0
+            pending_mesh_adjustment: dict[str, Any] | None = None
+            for attempt in range(1, max_attempts + 1):
                 attempt_dir = ensure_dir(case_dir / f"attempt_{attempt}")
                 payload_path = attempt_dir / "payload.json"
                 payload = {
@@ -345,6 +512,7 @@ class AutomationRunner:
                     "config": cfg,
                     "case_dir": str(attempt_dir),
                     "project_root": str(self.project_root),
+                    "mesh_adjustment": pending_mesh_adjustment or {},
                 }
                 write_json(payload_path, payload)
 
@@ -375,6 +543,16 @@ class AutomationRunner:
                         run_id=run_id,
                         attempt=attempt,
                     )
+                    forced_failure_type = str(case_result.get("failure_type", "")).strip().lower()
+                    if forced_failure_type == "timeout":
+                        run_info["timed_out"] = True
+                        run_info["returncode"] = None
+                    elif forced_failure_type in {"non_zero_exit", "python_exception"}:
+                        run_info["returncode"] = 1
+                    elif forced_failure_type == "bad_mesh":
+                        run_info["stderr"] = "mesh quality gate failed"
+                    if forced_failure_type == "python_exception":
+                        run_info["log_text"] = "ERROR in Python script"
                 else:
                     def driver_event(event: dict[str, Any]) -> None:
                         if event.get("type") == "log_line":
@@ -430,7 +608,11 @@ class AutomationRunner:
                     "log_path": run_info.get("log_path", ""),
                 }
                 case_result["payload_path"] = str(payload_path)
+                case_result["failure_type"] = self._classify_failure_type(case_result, run_info)
                 case_result["failure_reason"] = self._derive_failure_reason(case_result, run_info)
+                case_result["failure_mode"] = self._classify_failure_mode(
+                    case_result, case_result.get("failure_type", "")
+                )
                 write_json(case_result_path, case_result)
 
                 if run_info.get("log_text"):
@@ -447,13 +629,31 @@ class AutomationRunner:
                     )
                     break
 
+                should_retry, next_mesh_adjustment, mesh_strategy_index, retry_note = self._plan_retry(
+                    failure_type=str(case_result.get("failure_type", "")).strip().lower(),
+                    failure_mode=str(case_result.get("failure_mode", "")).strip().lower(),
+                    config=cfg,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    mesh_strategy_index=mesh_strategy_index,
+                )
+                if not should_retry:
+                    break
+
+                pending_mesh_adjustment = next_mesh_adjustment
+                retry_reason = case_result.get("failure_reason") or "case failed"
+                if retry_note:
+                    retry_reason = f"{retry_reason} | {retry_note}"
                 self._emit(
                     progress,
                     type="case_retry",
                     case_id=case_id,
                     attempt=attempt,
-                    max_attempts=max_retries + 1,
-                    reason=(case_result.get("failure_reason") or "case failed"),
+                    max_attempts=max_attempts,
+                    failure_type=case_result.get("failure_type", ""),
+                    failure_mode=case_result.get("failure_mode", ""),
+                    mesh_adjustment=pending_mesh_adjustment or {},
+                    reason=retry_reason,
                 )
 
             if not last_result:
@@ -462,7 +662,7 @@ class AutomationRunner:
                     "success": False,
                     "error": "No case result produced.",
                 }
-            last_result["attempts"] = int(last_result.get("attempt", max_retries + 1))
+            last_result["attempts"] = int(last_result.get("attempt", max_attempts))
             new_results[case_id] = last_result
             if not last_result.get("success"):
                 self._emit(
@@ -470,6 +670,8 @@ class AutomationRunner:
                     type="case_failed",
                     case_id=case_id,
                     attempt=last_result.get("attempt"),
+                    failure_type=last_result.get("failure_type", ""),
+                    failure_mode=last_result.get("failure_mode", ""),
                     reason=last_result.get("failure_reason", last_result.get("error", "")),
                 )
 
@@ -482,6 +684,8 @@ class AutomationRunner:
                 if last_result.get("payload_path")
                 else "",
                 "metrics": last_result.get("metrics", {}),
+                "failure_type": last_result.get("failure_type", ""),
+                "failure_mode": last_result.get("failure_mode", ""),
                 "error": last_result.get("failure_reason", last_result.get("error", "")),
             }
 
@@ -505,6 +709,8 @@ class AutomationRunner:
                     "case_id": case_id,
                     "success": prior.get("status") == "success",
                     "metrics": prior.get("metrics", {}),
+                    "failure_type": prior.get("failure_type", ""),
+                    "failure_mode": prior.get("failure_mode", ""),
                     "error": prior.get("error", ""),
                     "messages": ["carried from prior run"],
                     "screenshots": [],

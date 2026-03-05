@@ -19,6 +19,30 @@ llm:
     model: llama-3.1-8b-instant
     api_key_env: GROQ_API_KEY
     timeout_seconds: 60
+mesh:
+  default_params:
+    max_element_size_m: ''
+    min_element_size_m: ''
+    inflation_layers: ''
+    target_y_plus: ''
+    refinement_zones: []
+  quality_gate:
+    enabled: true
+    require_all_metrics: false
+    skewness_max: 0.95
+    aspect_ratio_max: 100.0
+    orthogonality_min: 0.1
+    element_count_min: 1000
+    element_count_max: 50000000
+  retry:
+    enabled: true
+    strategy:
+    - coarsen
+    - refine
+    coarsen_size_scale: 1.35
+    refine_size_scale: 0.75
+    coarsen_inflation_delta: -1
+    refine_inflation_delta: 1
 solve:
   enabled: false
   skip_if_results_exist: true

@@ -89,6 +89,24 @@ def _sanitize_case_id(value: str) -> str:
     return clean
 
 
+def _to_float_or_none(value: Any) -> float | None:
+    if value in ("", None):
+        return None
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return None
+
+
+def _to_int_or_none(value: Any) -> int | None:
+    if value in ("", None):
+        return None
+    try:
+        return int(round(float(str(value).strip())))
+    except Exception:
+        return None
+
+
 def _normalize_rows(
     rows: Any,
     *,
@@ -365,5 +383,252 @@ class LLMCaseGenerator:
             "rows": rows,
             "csv": csv_text,
             "notes": str(parsed.get("notes", "")).strip(),
+            "raw_content": content,
+        }
+
+
+class LLMMeshAdvisor:
+    def __init__(self, llm_config: dict[str, Any], transport: TransportFn | None = None):
+        self._cfg = llm_config or {}
+        self._transport = transport or _post_json
+
+    @staticmethod
+    def _infer_numeric_ranges(existing_rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+        ranges: dict[str, dict[str, float]] = {}
+        candidates: dict[str, list[float]] = {}
+        for row in existing_rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                key_text = str(key).strip()
+                if key_text.lower() == "case_id":
+                    continue
+                parsed = _to_float_or_none(value)
+                if parsed is None:
+                    continue
+                candidates.setdefault(key_text, []).append(parsed)
+
+        for key, values in candidates.items():
+            if not values:
+                continue
+            ranges[key] = {
+                "min": min(values),
+                "max": max(values),
+            }
+        return ranges
+
+    @staticmethod
+    def _mesh_context(config: dict[str, Any], existing_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        study_cfg = config.get("study", {}) if isinstance(config.get("study", {}), dict) else {}
+        mesh_cfg = config.get("mesh", {}) if isinstance(config.get("mesh", {}), dict) else {}
+        defaults = mesh_cfg.get("default_params", {}) if isinstance(mesh_cfg.get("default_params", {}), dict) else {}
+        gate = mesh_cfg.get("quality_gate", {}) if isinstance(mesh_cfg.get("quality_gate", {}), dict) else {}
+
+        mapping_hints: list[dict[str, Any]] = []
+        for mapping in config.get("parameter_mappings", []):
+            if not isinstance(mapping, dict):
+                continue
+            mapping_hints.append(
+                {
+                    "source_column": mapping.get("source_column", ""),
+                    "target_type": mapping.get("target_type", ""),
+                    "match_type": (mapping.get("match") or {}).get("type", ""),
+                    "units": mapping.get("units", ""),
+                }
+            )
+
+        numeric_ranges = LLMMeshAdvisor._infer_numeric_ranges(existing_rows)
+        return {
+            "study": {
+                "template_model": study_cfg.get("template_model", ""),
+                "design_name": study_cfg.get("design_name", ""),
+                "scenario_name": study_cfg.get("scenario_name", ""),
+                "physics_type": study_cfg.get("physics_type", ""),
+                "fluid": study_cfg.get("fluid", ""),
+                "geometry_characteristic_length_m": study_cfg.get("geometry_characteristic_length_m", ""),
+            },
+            "parameter_mappings": mapping_hints,
+            "case_numeric_ranges": numeric_ranges,
+            "mesh_defaults": defaults,
+            "mesh_quality_gate": gate,
+            "sample_cases": existing_rows[:4],
+        }
+
+    @staticmethod
+    def _build_messages(
+        *,
+        prompt: str,
+        context: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        system_text = (
+            "You are a CFD mesh advisor.\n"
+            "Return exactly one JSON object and no markdown.\n"
+            "Schema:\n"
+            "{"
+            "\"mesh_params\":{"
+            "\"target_y_plus\":number|null,"
+            "\"inflation_layers\":integer|null,"
+            "\"max_element_size_m\":number|null,"
+            "\"min_element_size_m\":number|null,"
+            "\"refinement_zones\":[{\"name\":\"...\",\"size_m\":number,\"rationale\":\"...\"}]"
+            "},"
+            "\"quality_gate\":{"
+            "\"skewness_max\":number|null,"
+            "\"aspect_ratio_max\":number|null,"
+            "\"orthogonality_min\":number|null,"
+            "\"element_count_min\":number|null,"
+            "\"element_count_max\":number|null"
+            "},"
+            "\"notes\":\"...\""
+            "}\n"
+            "Rules:\n"
+            "- Keep values realistic for external turbulent airflow and internal CFD if context is ambiguous.\n"
+            "- Use SI units in all values.\n"
+            "- Do not include any keys outside schema."
+        )
+        user_text = (
+            f"Request: {prompt.strip()}\n\n"
+            f"Context JSON:\n{json.dumps(context, ensure_ascii=True)}\n\n"
+            "Return JSON only."
+        )
+        return [
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": user_text},
+        ]
+
+    def _run_ollama(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ) -> tuple[str, str]:
+        ollama_cfg = self._cfg.get("ollama", {}) if isinstance(self._cfg, dict) else {}
+        base_url = str(ollama_cfg.get("base_url", "http://127.0.0.1:11434")).rstrip("/")
+        model = str(ollama_cfg.get("model", "llama3.2:3b")).strip()
+        timeout = int(ollama_cfg.get("timeout_seconds", 120) or 120)
+        if not model:
+            raise ValueError("llm.ollama.model is empty.")
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": float(temperature)},
+        }
+        response = self._transport(f"{base_url}/api/chat", {}, payload, timeout)
+        content = _extract_content_from_ollama(response)
+        return model, content
+
+    def _run_groq(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ) -> tuple[str, str]:
+        groq_cfg = self._cfg.get("groq", {}) if isinstance(self._cfg, dict) else {}
+        base_url = str(groq_cfg.get("base_url", "https://api.groq.com/openai/v1")).rstrip("/")
+        model = str(groq_cfg.get("model", "llama-3.1-8b-instant")).strip()
+        timeout = int(groq_cfg.get("timeout_seconds", 60) or 60)
+        api_key_env = str(groq_cfg.get("api_key_env", "GROQ_API_KEY")).strip() or "GROQ_API_KEY"
+        api_key = os.environ.get(api_key_env, "").strip()
+        if not api_key:
+            raise ValueError(f"Groq API key missing. Set environment variable: {api_key_env}")
+        if not model:
+            raise ValueError("llm.groq.model is empty.")
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": float(temperature),
+        }
+        headers = {"Authorization": f"Bearer {api_key}"}
+        response = self._transport(f"{base_url}/chat/completions", headers, payload, timeout)
+        content = _extract_content_from_groq(response)
+        return model, content
+
+    @staticmethod
+    def _normalize_refinement_zones(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        zones: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            size_m = _to_float_or_none(item.get("size_m"))
+            rationale = str(item.get("rationale", "")).strip()
+            zones.append(
+                {
+                    "name": name,
+                    "size_m": size_m if size_m is not None else "",
+                    "rationale": rationale,
+                }
+            )
+        return zones
+
+    @staticmethod
+    def _normalize_payload(parsed: dict[str, Any]) -> dict[str, Any]:
+        mesh_raw = parsed.get("mesh_params", {}) if isinstance(parsed.get("mesh_params", {}), dict) else {}
+        gate_raw = parsed.get("quality_gate", {}) if isinstance(parsed.get("quality_gate", {}), dict) else {}
+        mesh_params = {
+            "target_y_plus": _to_float_or_none(mesh_raw.get("target_y_plus")),
+            "inflation_layers": _to_int_or_none(mesh_raw.get("inflation_layers")),
+            "max_element_size_m": _to_float_or_none(mesh_raw.get("max_element_size_m")),
+            "min_element_size_m": _to_float_or_none(mesh_raw.get("min_element_size_m")),
+            "refinement_zones": LLMMeshAdvisor._normalize_refinement_zones(
+                mesh_raw.get("refinement_zones", [])
+            ),
+        }
+        quality_gate = {
+            "skewness_max": _to_float_or_none(gate_raw.get("skewness_max")),
+            "aspect_ratio_max": _to_float_or_none(gate_raw.get("aspect_ratio_max")),
+            "orthogonality_min": _to_float_or_none(gate_raw.get("orthogonality_min")),
+            "element_count_min": _to_int_or_none(gate_raw.get("element_count_min")),
+            "element_count_max": _to_int_or_none(gate_raw.get("element_count_max")),
+        }
+        return {
+            "mesh_params": mesh_params,
+            "quality_gate": quality_gate,
+            "notes": str(parsed.get("notes", "")).strip(),
+        }
+
+    def suggest(
+        self,
+        *,
+        prompt: str,
+        config: dict[str, Any],
+        existing_rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        task = str(prompt or "").strip()
+        if not task:
+            raise ValueError("Prompt is empty.")
+
+        provider = str(self._cfg.get("provider", "ollama")).strip().lower() or "ollama"
+        temperature = float(self._cfg.get("temperature", 0.1) or 0.1)
+        context = self._mesh_context(config, existing_rows)
+        messages = self._build_messages(prompt=task, context=context)
+
+        if provider == "ollama":
+            model, content = self._run_ollama(messages=messages, temperature=temperature)
+        elif provider == "groq":
+            model, content = self._run_groq(messages=messages, temperature=temperature)
+        else:
+            raise ValueError(f"Unsupported llm.provider: {provider}")
+
+        json_block = _find_first_json_object(content.strip())
+        try:
+            parsed = json.loads(json_block)
+        except json.JSONDecodeError as ex:
+            raise ValueError("LLM returned malformed JSON object.") from ex
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM output JSON root must be an object.")
+
+        normalized = self._normalize_payload(parsed)
+        return {
+            "provider": provider,
+            "model": model,
+            "mesh_params": normalized["mesh_params"],
+            "quality_gate": normalized["quality_gate"],
+            "notes": normalized["notes"],
             "raw_content": content,
         }

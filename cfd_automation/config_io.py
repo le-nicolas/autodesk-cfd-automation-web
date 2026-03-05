@@ -37,6 +37,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "timeout_seconds": 60,
         },
     },
+    "mesh": {
+        "default_params": {
+            "max_element_size_m": "",
+            "min_element_size_m": "",
+            "inflation_layers": "",
+            "target_y_plus": "",
+            "refinement_zones": [],
+        },
+        "quality_gate": {
+            "enabled": True,
+            "require_all_metrics": False,
+            "skewness_max": 0.95,
+            "aspect_ratio_max": 100.0,
+            "orthogonality_min": 0.1,
+            "element_count_min": 1000,
+            "element_count_max": 50000000,
+        },
+        "retry": {
+            "enabled": True,
+            "strategy": ["coarsen", "refine"],
+            "coarsen_size_scale": 1.35,
+            "refine_size_scale": 0.75,
+            "coarsen_inflation_delta": -1,
+            "refine_inflation_delta": 1,
+        },
+    },
     "solve": {
         "enabled": False,
         "skip_if_results_exist": True,
@@ -229,6 +255,7 @@ def case_fingerprint(case: dict[str, Any], config: dict[str, Any]) -> str:
         "case": case,
         "parameter_mappings": config.get("parameter_mappings", []),
         "solve": config.get("solve", {}),
+        "mesh": config.get("mesh", {}),
         "metrics": config.get("metrics", []),
     }
     return stable_hash(relevant)

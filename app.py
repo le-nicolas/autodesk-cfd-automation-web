@@ -8,7 +8,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from cfd_automation import AutomationRunner, LLMCaseGenerator
+from cfd_automation import AutomationRunner, LLMCaseGenerator, LLMMeshAdvisor
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -57,9 +57,42 @@ def enrich_summary(summary: dict[str, Any]) -> dict[str, Any]:
         item["metrics_csv_url"] = to_runtime_url(item.get("metrics_csv", ""))
         item["screenshot_urls"] = [to_runtime_url(path) for path in item.get("screenshots", [])]
         item["failure_reason"] = item.get("failure_reason") or item.get("error", "")
+        item["failure_type"] = item.get("failure_type", "")
+        item["failure_mode"] = item.get("failure_mode", "")
         case_results.append(item)
     out["case_results"] = case_results
     return out
+
+
+def merge_mesh_suggestion_into_config(config: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(config)
+    mesh_cfg = dict(merged.get("mesh", {}) if isinstance(merged.get("mesh", {}), dict) else {})
+    default_params = dict(
+        mesh_cfg.get("default_params", {})
+        if isinstance(mesh_cfg.get("default_params", {}), dict)
+        else {}
+    )
+    quality_gate = dict(
+        mesh_cfg.get("quality_gate", {})
+        if isinstance(mesh_cfg.get("quality_gate", {}), dict)
+        else {}
+    )
+
+    for key, value in suggestion.get("mesh_params", {}).items():
+        if key == "refinement_zones":
+            default_params[key] = value if isinstance(value, list) else []
+            continue
+        default_params[key] = "" if value is None else value
+
+    for key, value in suggestion.get("quality_gate", {}).items():
+        if value is None:
+            continue
+        quality_gate[key] = value
+
+    mesh_cfg["default_params"] = default_params
+    mesh_cfg["quality_gate"] = quality_gate
+    merged["mesh"] = mesh_cfg
+    return merged
 
 
 def require_api_key() -> Any | None:
@@ -135,9 +168,14 @@ class RunManager:
                     f"Case succeeded: {event.get('case_id', '')} (attempt {event.get('attempt', 1)})"
                 )
             elif event_type == "case_retry":
+                failure_type = str(event.get("failure_type", "")).strip()
+                failure_mode = str(event.get("failure_mode", "")).strip()
+                mesh_adjustment = event.get("mesh_adjustment", {})
                 self._append_log(
                     f"Case retry: {event.get('case_id', '')} "
                     f"(attempt {event.get('attempt', 1)}/{event.get('max_attempts', 1)}) "
+                    f"type={failure_type or '-'} mode={failure_mode or '-'} "
+                    f"mesh_adjustment={mesh_adjustment if mesh_adjustment else '{}'} "
                     f"reason={event.get('reason', '')}"
                 )
             elif event_type == "case_failed":
@@ -145,13 +183,16 @@ class RunManager:
                     "case_id": event.get("case_id", ""),
                     "attempt": event.get("attempt", 0),
                     "reason": event.get("reason", ""),
+                    "failure_type": event.get("failure_type", ""),
+                    "failure_mode": event.get("failure_mode", ""),
                 }
                 failures = self._state.setdefault("recent_failures", [])
                 failures.append(fail)
                 if len(failures) > 50:
                     del failures[:-50]
                 self._append_log(
-                    f"Case failed: {fail['case_id']} (attempt {fail['attempt']}), reason={fail['reason']}"
+                    f"Case failed: {fail['case_id']} (attempt {fail['attempt']}), "
+                    f"type={fail['failure_type'] or 'unknown'}, reason={fail['reason']}"
                 )
             elif event_type == "case_log":
                 source = event.get("source", "driver")
@@ -297,6 +338,55 @@ def api_llm_generate_cases():
             "row_count": result.get("row_count", 0),
             "rows": result.get("rows", []),
             "csv": result.get("csv", ""),
+        }
+    )
+
+
+@app.post("/api/llm/suggest-mesh")
+def api_llm_suggest_mesh():
+    auth = require_api_key()
+    if auth:
+        return auth
+
+    payload = request.get_json(force=True, silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Request body must be a JSON object."}), 400
+
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        prompt = (
+            "Suggest robust CFD mesh defaults and mesh quality gates for this project "
+            "based on config and case ranges."
+        )
+    apply_changes = bool(payload.get("apply", False))
+
+    cfg = runner.get_config()
+    llm_cfg = cfg.get("llm", {}) if isinstance(cfg.get("llm", {}), dict) else {}
+    existing_rows = runner.get_cases()
+
+    try:
+        advisor = LLMMeshAdvisor(llm_cfg)
+        suggestion = advisor.suggest(prompt=prompt, config=cfg, existing_rows=existing_rows)
+    except ValueError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 400
+    except RuntimeError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 502
+
+    saved_config = None
+    if apply_changes:
+        merged = merge_mesh_suggestion_into_config(cfg, suggestion)
+        saved_config = runner.save_config(merged)
+
+    return jsonify(
+        {
+            "ok": True,
+            "applied": apply_changes,
+            "provider": suggestion.get("provider", ""),
+            "model": suggestion.get("model", ""),
+            "mesh_params": suggestion.get("mesh_params", {}),
+            "quality_gate": suggestion.get("quality_gate", {}),
+            "notes": suggestion.get("notes", ""),
+            "config": saved_config if saved_config else None,
         }
     )
 

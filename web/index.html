@@ -84,6 +84,19 @@
       <pre id="llmResult"></pre>
     </section>
 
+    <section class="panel">
+      <h2>Mesh Intelligence (v2.1)</h2>
+      <p class="helper">
+        Ask for mesh guidance from physics and case ranges, then optionally apply the recommendation to `mesh.default_params` and `mesh.quality_gate`.
+      </p>
+      <textarea id="meshPrompt" class="llm-prompt" spellcheck="false" placeholder="Example: external turbulent airflow around a small body at 1-5 m/s, target robust mesh with practical runtime."></textarea>
+      <div class="actions">
+        <button id="meshSuggestBtn">Suggest Mesh Params</button>
+        <button id="meshApplyBtn" class="accent">Suggest + Apply To Config</button>
+      </div>
+      <pre id="meshResult"></pre>
+    </section>
+
     <section class="grid">
       <article class="panel half">
         <h2>Live Status</h2>
