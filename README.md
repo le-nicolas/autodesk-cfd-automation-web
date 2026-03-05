@@ -17,6 +17,169 @@ Commercial tools like Ansys OptiSLang and SimScale charge enterprise prices for 
 
 | Built for Autodesk CFD 2026. Runs locally. No cloud required.
 
+
+## How to Use CADEX
+
+1. Install
+bashgit clone https://github.com/le-nicolas/autodesk-cfd-automation-web
+cd autodesk-cfd-automation-web
+pip install -r requirements.txt
+Choose your LLM provider:
+Ollama (free, local, no API key):
+bashwinget install Ollama.Ollama
+ollama pull llama3.2:3b
+Groq (free cloud):
+bash$env:GROQ_API_KEY="your-key"
+
+2. Launch
+bashpython app.py
+```
+Open `http://127.0.0.1:5055`
+
+---
+
+### 3. Connect Your Study
+
+- Click **Discover Studies** → select your `.cfdst` file
+- Or type the path manually
+- Click **Apply Path to Config** → **Save Config**
+
+---
+
+### 4. Introspect
+
+Click **Introspect Study** — CADEX discovers:
+- Available boundary conditions
+- Materials
+- Design scenarios
+- Parts
+
+This confirms your study is wired correctly before anything runs.
+
+---
+
+### 5. Get Mesh Recommendations
+
+In the **Mesh Intelligence** panel:
+- Click **Suggest Mesh Params**
+- CADEX reads your physics config and returns:
+```
+y+ target:        1
+Inflation layers: 5
+Max element size: 0.01m
+Min element size: 0.001m
+```
+- Click **Suggest + Apply To Config** to save
+- Apply these values manually in Autodesk CFD mesher
+
+---
+
+### 6. Choose Your Run Mode
+
+You have three ways to run CADEX depending on what you need:
+
+---
+
+#### Mode A — Manual Cases (v1.0)
+Best for: when you already know exactly what to test.
+
+- Open `config/cases.csv`
+- Define your parameter rows manually
+- Click **Run All**
+
+---
+
+#### Mode B — Natural Language Cases (v2.0)
+Best for: fast parametric setup without editing CSV.
+
+In the **LLM Case Builder** panel, type:
+```
+test inlet velocities from 1 to 5 m/s in 1 m/s steps 
+with k-epsilon and k-omega turbulence models, 
+ambient temp 25°C
+
+Click Generate Cases → preview the rows
+Click Apply to save to cases.csv
+Click Run All
+
+
+Mode C — Generative Design Loop (v4.0)
+Best for: when you have a goal and want CADEX to find the answer autonomously.
+In the Generative Design Loop panel, define:
+json{
+  "objective_alias": "temp_max_c",
+  "objective_goal": "min",
+  "search_space": [
+    {"name": "fin_height_mm", "type": "real", "min": 5, "max": 20},
+    {"name": "fin_spacing_mm", "type": "real", "min": 2, "max": 10},
+    {"name": "flow_rate_lpm",  "type": "real", "min": 1, "max": 5}
+  ],
+  "constraints": [
+    {"alias": "pressure_drop_pa", "operator": "<=", "threshold": 50}
+  ],
+  "batch_size": 10,
+  "max_batches": 5,
+  "use_llm_explanations": true
+}
+```
+- Click **Start Loop**
+- Watch live in the dashboard as CADEX:
+```
+Batch 1 → runs 10 cases → reads results
+        → optimizer focuses on promising region
+Batch 2 → runs 10 smarter cases → reads results
+        → optimizer narrows further
+...
+Batch 5 → converged → optimal design found
+```
+- Click **Stop Loop** anytime for graceful exit
+
+---
+
+### 7. Monitor Live
+
+During any run the dashboard shows:
+- Live log stream per case
+- Current batch progress
+- Pass/fail status per case
+- Failure type if something goes wrong:
+```
+timeout | non_zero_exit | python_exception | no_results | bad_mesh
+```
+
+---
+
+### 8. Review Outputs
+
+From **Latest Run Outputs**:
+
+| Output | What it tells you |
+|---|---|
+| Per-case summary CSV | Every case result in detail |
+| Master ranked CSV | All cases ranked by your criteria |
+| Charts | Visual parameter vs metric relationships |
+| Screenshots | CFD result images per case |
+| HTML/markdown report | Shareable summary of the full study |
+
+---
+
+### 9. Iterate
+
+**Run only what changed:**
+```
+Edit cases.csv → click Run Changed
+```
+Only cases with modified inputs re-run. Everything else is skipped.
+
+**Run only failures:**
+```
+Click Run Failed
+Retries failed cases with failure-mode aware logic:
+
+Bad mesh → retries with adjusted mesh params
+Solver divergence → retries with coarser mesh
+Script failure → retries as-is
+
 - Config-driven case execution from CSV.
 - Direct CFD scripting execution via `CFD.exe -script`.
 - Study introspection (design/scenario/BC/material/part discovery).
