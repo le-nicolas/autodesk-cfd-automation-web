@@ -1,0 +1,87 @@
+study:
+  template_model: "C:/Users/User/Downloads/Kani yawa/Kani yawa.cfdst"
+  design_name: "Design 1"
+  scenario_name: "Scenario 1"
+
+automation:
+  cfd_executable: "C:/Program Files/Autodesk/CFD 2026/CFD.exe"
+  timeout_minutes: 120
+  max_retries: 1
+
+solve:
+  enabled: false
+  skip_if_results_exist: true
+  scenario_overrides:
+    iterations: 100
+    convergenceThreshold: 0.5
+
+outputs:
+  save_all_summary: true
+  screenshots:
+    enabled: true
+    views:
+      - default
+      - iso
+      - section
+  cutplanes: []
+  report:
+    enabled: true
+
+metrics:
+  - alias: temp_max_c
+    section: "field variable results summary"
+    quantity: "temp.max"
+    unit: "C"
+  - alias: pressure_max_dyne_cm2
+    section: "field variable results summary"
+    quantity: "press.max"
+    unit: "dyne/cm^2"
+  - alias: vx_vel_max_cm_s
+    section: "field variable results summary"
+    quantity: "vx vel.max"
+    unit: "cm/s"
+
+criteria:
+  - alias: temp_max_c
+    operator: "<="
+    threshold: 500.0
+  - alias: pressure_max_dyne_cm2
+    operator: "<="
+    threshold: 2000.0
+
+ranking:
+  - alias: temp_max_c
+    goal: min
+    weight: 0.7
+  - alias: pressure_max_dyne_cm2
+    goal: min
+    weight: 0.3
+
+parameter_mappings:
+  - source_column: inlet_velocity_ms
+    target_type: boundary_condition
+    match:
+      type: "Normal Velocity"
+      entity_ids: [18]
+    property: value
+    units: "m/s"
+  - source_column: ambient_temp_c
+    target_type: boundary_condition
+    match:
+      type: "Temperature"
+      entity_ids: [18, 170]
+    property: value
+    units: "Celsius"
+  - source_column: total_heat_w
+    target_type: boundary_condition
+    match:
+      type: "Total Heat Generation"
+      entity_names: ["Part1.Body24"]
+    property: value
+    units: "W"
+  - source_column: chip_heat_gen_wm3
+    target_type: boundary_condition
+    match:
+      type: "Heat Generation"
+    property: value
+    units: "W/m3"

@@ -1,0 +1,4 @@
+case_id,inlet_velocity_ms,ambient_temp_c,total_heat_w,chip_heat_gen_wm3,force_solve
+KANI_BASE,4.5,40,255,114,false
+KANI_LOWFLOW,3.8,40,255,114,false
+KANI_HIGHHEAT,4.5,40,300,130,false

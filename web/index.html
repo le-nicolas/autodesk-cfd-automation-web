@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autodesk CFD Automation Console</title>
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+  <div class="bg-orbit orbit-a"></div>
+  <div class="bg-orbit orbit-b"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>Autodesk CFD Automation Console</h1>
+        <p>Configurable run orchestration, retries, ranking, charts, screenshots, and report generation.</p>
+      </div>
+      <div class="badge-row">
+        <span id="runState" class="pill idle">Idle</span>
+        <span id="runMode" class="pill secondary">Mode: -</span>
+      </div>
+    </header>
+
+    <section class="actions">
+      <button id="reloadBtn">Reload</button>
+      <button id="saveConfigBtn">Save Config</button>
+      <button id="saveCasesBtn">Save Cases</button>
+      <button id="introspectBtn">Introspect Study</button>
+      <button id="runAllBtn" class="accent">Run All</button>
+      <button id="runFailedBtn">Rerun Failed</button>
+      <button id="runChangedBtn">Rerun Changed</button>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Config (JSON)</h2>
+        <textarea id="configText" spellcheck="false"></textarea>
+      </article>
+      <article class="panel">
+        <h2>Cases (CSV)</h2>
+        <textarea id="casesText" spellcheck="false"></textarea>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="panel half">
+        <h2>Live Status</h2>
+        <div class="status-line">
+          <span id="caseCounter">0 / 0</span>
+          <span id="currentCase">Current: -</span>
+        </div>
+        <pre id="logs"></pre>
+      </article>
+      <article class="panel half">
+        <h2>Study Introspection</h2>
+        <pre id="introspection"></pre>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Latest Run Outputs</h2>
+      <div id="resultsLinks" class="links"></div>
+      <div id="resultsTableWrap"></div>
+      <div id="chartsWrap" class="charts"></div>
+    </section>
+  </main>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>

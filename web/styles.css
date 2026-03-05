@@ -1,0 +1,258 @@
+:root {
+  --ink: #0f172a;
+  --ink-soft: #334155;
+  --paper: #f8fafc;
+  --line: #cbd5e1;
+  --accent: #0ea5a3;
+  --accent-strong: #0f766e;
+  --warning: #f59e0b;
+  --idle: #64748b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI Variable", "Segoe UI", Tahoma, sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(1100px 700px at 90% -10%, #99f6e4 0%, transparent 60%),
+    radial-gradient(900px 600px at -10% 120%, #fef08a 0%, transparent 70%),
+    linear-gradient(145deg, #ecfeff 0%, #f8fafc 48%, #fff7ed 100%);
+  min-height: 100vh;
+}
+
+.bg-orbit {
+  position: fixed;
+  border-radius: 50%;
+  border: 2px dashed rgba(15, 118, 110, 0.2);
+  pointer-events: none;
+}
+
+.orbit-a {
+  width: 600px;
+  height: 600px;
+  right: -220px;
+  top: -220px;
+  animation: spin 36s linear infinite;
+}
+
+.orbit-b {
+  width: 520px;
+  height: 520px;
+  left: -240px;
+  bottom: -200px;
+  animation: spinReverse 28s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes spinReverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+.shell {
+  max-width: 1380px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  backdrop-filter: blur(6px);
+  padding: 18px 20px;
+}
+
+.topbar h1 {
+  margin: 0 0 6px 0;
+  font-size: 1.7rem;
+  letter-spacing: 0.2px;
+}
+
+.topbar p {
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.badge-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border: 1px solid var(--line);
+  background: #e2e8f0;
+}
+
+.pill.idle {
+  background: #e2e8f0;
+  color: var(--idle);
+}
+
+.pill.running {
+  background: #ccfbf1;
+  color: var(--accent-strong);
+}
+
+.pill.secondary {
+  background: #f1f5f9;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+button {
+  border: 1px solid #94a3b8;
+  background: #ffffff;
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 9px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 150ms ease;
+}
+
+button:hover {
+  border-color: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+button.accent {
+  border-color: var(--accent-strong);
+  background: linear-gradient(135deg, #14b8a6, #0f766e);
+  color: #f0fdfa;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panel {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+}
+
+.panel h2 {
+  margin: 0 0 10px 0;
+  font-size: 1rem;
+}
+
+textarea {
+  width: 100%;
+  min-height: 300px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  padding: 10px;
+  background: #f8fafc;
+  color: var(--ink);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12.5px;
+}
+
+.half pre,
+#logs,
+#introspection {
+  min-height: 300px;
+  max-height: 420px;
+  overflow: auto;
+  background: #0b1020;
+  color: #dbeafe;
+  border-radius: 12px;
+  padding: 12px;
+  border: 1px solid #1e293b;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.status-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.links a {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f766e;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th, td {
+  border: 1px solid #d1d5db;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+th {
+  background: #e2e8f0;
+}
+
+.charts {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.charts img {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+}
+
+@media (max-width: 1024px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  textarea {
+    min-height: 240px;
+  }
+}
