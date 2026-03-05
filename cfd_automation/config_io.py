@@ -21,6 +21,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "timeout_minutes": 120,
         "max_retries": 1,
     },
+    "llm": {
+        "provider": "ollama",
+        "temperature": 0.1,
+        "max_rows": 200,
+        "ollama": {
+            "base_url": "http://127.0.0.1:11434",
+            "model": "llama3.2:3b",
+            "timeout_seconds": 120,
+        },
+        "groq": {
+            "base_url": "https://api.groq.com/openai/v1",
+            "model": "llama-3.1-8b-instant",
+            "api_key_env": "GROQ_API_KEY",
+            "timeout_seconds": 60,
+        },
+    },
     "solve": {
         "enabled": False,
         "skip_if_results_exist": True,

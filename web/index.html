@@ -68,6 +68,22 @@
       </article>
     </section>
 
+    <section class="panel">
+      <h2>LLM Case Builder</h2>
+      <p class="helper">
+        Describe the DOE in plain language (ranges, steps, model variants). Generate preview or apply directly to Cases CSV.
+      </p>
+      <textarea id="llmPrompt" class="llm-prompt" spellcheck="false" placeholder="Example: test inlet velocities from 1 to 5 m/s in 1 m/s steps with two turbulence models k-epsilon and k-omega. Keep ambient_temp_c at 25 and total_heat_w at 90."></textarea>
+      <div class="study-row">
+        <input id="llmMaxRows" type="number" min="1" max="1000" placeholder="Max rows (optional)">
+      </div>
+      <div class="actions">
+        <button id="llmPreviewBtn">Generate CSV Preview</button>
+        <button id="llmApplyBtn" class="accent">Generate + Apply to Cases</button>
+      </div>
+      <pre id="llmResult"></pre>
+    </section>
+
     <section class="grid">
       <article class="panel half">
         <h2>Live Status</h2>

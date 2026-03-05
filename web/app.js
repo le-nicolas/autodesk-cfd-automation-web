@@ -19,6 +19,11 @@ const ui = {
   runAllBtn: document.getElementById("runAllBtn"),
   runFailedBtn: document.getElementById("runFailedBtn"),
   runChangedBtn: document.getElementById("runChangedBtn"),
+  llmPrompt: document.getElementById("llmPrompt"),
+  llmMaxRows: document.getElementById("llmMaxRows"),
+  llmPreviewBtn: document.getElementById("llmPreviewBtn"),
+  llmApplyBtn: document.getElementById("llmApplyBtn"),
+  llmResult: document.getElementById("llmResult"),
   studyPathInput: document.getElementById("studyPathInput"),
   discoverStudiesBtn: document.getElementById("discoverStudiesBtn"),
   applyStudyPathBtn: document.getElementById("applyStudyPathBtn"),
@@ -246,6 +251,8 @@ async function loadConfig() {
   const config = await callApi("/api/config");
   currentConfig = config;
   ui.configText.value = JSON.stringify(config, null, 2);
+  const llmMaxRows = config && config.llm ? config.llm.max_rows : "";
+  ui.llmMaxRows.value = llmMaxRows ? String(llmMaxRows) : "";
   syncStudyPathInput();
   updateSolveBanner();
 }
@@ -273,6 +280,43 @@ async function saveCases() {
     body: JSON.stringify({ csv: ui.casesText.value }),
   });
   flash("Cases CSV saved.");
+}
+
+function renderLlmResult(payload, applied) {
+  const lines = [];
+  lines.push(`Provider: ${payload.provider || "-"}`);
+  lines.push(`Model: ${payload.model || "-"}`);
+  lines.push(`Rows generated: ${payload.row_count || 0}`);
+  lines.push(`Applied to cases.csv: ${applied ? "yes" : "no"}`);
+  if (payload.notes) {
+    lines.push("");
+    lines.push("Notes:");
+    lines.push(payload.notes);
+  }
+  ui.llmResult.textContent = lines.join("\n");
+}
+
+async function generateCasesFromPrompt(apply) {
+  const prompt = (ui.llmPrompt.value || "").trim();
+  if (!prompt) {
+    throw new Error("Prompt is empty.");
+  }
+  const maxRowsText = (ui.llmMaxRows.value || "").trim();
+  const body = { prompt, apply };
+  if (maxRowsText) {
+    const parsed = Number.parseInt(maxRowsText, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error("Max rows must be a positive integer.");
+    }
+    body.max_rows = parsed;
+  }
+  const payload = await callApi("/api/llm/generate-cases", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  ui.casesText.value = payload.csv || ui.casesText.value;
+  renderLlmResult(payload, apply);
+  flash(`LLM generated ${payload.row_count || 0} row(s).`);
 }
 
 async function discoverStudies() {
@@ -409,6 +453,25 @@ ui.runChangedBtn.addEventListener("click", async () => {
     await startRun("changed");
   } catch (err) {
     flash(`Rerun changed failed: ${err.message}`);
+  }
+});
+
+ui.llmPreviewBtn.addEventListener("click", async () => {
+  try {
+    await generateCasesFromPrompt(false);
+  } catch (err) {
+    flash(`LLM preview failed: ${err.message}`);
+    ui.llmResult.textContent = `LLM preview failed: ${err.message}`;
+  }
+});
+
+ui.llmApplyBtn.addEventListener("click", async () => {
+  try {
+    await generateCasesFromPrompt(true);
+    flash("Generated cases applied to cases.csv.");
+  } catch (err) {
+    flash(`LLM apply failed: ${err.message}`);
+    ui.llmResult.textContent = `LLM apply failed: ${err.message}`;
   }
 });
 

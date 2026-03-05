@@ -8,7 +8,7 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from cfd_automation import AutomationRunner
+from cfd_automation import AutomationRunner, LLMCaseGenerator
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -241,6 +241,64 @@ def api_save_cases():
         return jsonify({"ok": False, "error": "Field 'csv' must be text."}), 400
     rows = runner.save_cases_csv(csv_text)
     return jsonify({"ok": True, "rows": rows})
+
+
+@app.post("/api/llm/generate-cases")
+def api_llm_generate_cases():
+    auth = require_api_key()
+    if auth:
+        return auth
+
+    payload = request.get_json(force=True, silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Request body must be a JSON object."}), 400
+
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        return jsonify({"ok": False, "error": "Field `prompt` is required."}), 400
+
+    apply_changes = bool(payload.get("apply", False))
+    max_rows_override = payload.get("max_rows")
+    if max_rows_override in ("", None):
+        max_rows_override = None
+    else:
+        try:
+            max_rows_override = int(max_rows_override)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Field `max_rows` must be an integer."}), 400
+
+    cfg = runner.get_config()
+    llm_cfg = cfg.get("llm", {}) if isinstance(cfg.get("llm", {}), dict) else {}
+    existing_rows = runner.get_cases()
+
+    try:
+        generator = LLMCaseGenerator(llm_cfg)
+        result = generator.generate(
+            prompt=prompt,
+            config=cfg,
+            existing_rows=existing_rows,
+            max_rows_override=max_rows_override,
+        )
+    except ValueError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 400
+    except RuntimeError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 502
+
+    if apply_changes:
+        runner.save_cases_csv(result["csv"])
+
+    return jsonify(
+        {
+            "ok": True,
+            "applied": apply_changes,
+            "provider": result.get("provider", ""),
+            "model": result.get("model", ""),
+            "notes": result.get("notes", ""),
+            "row_count": result.get("row_count", 0),
+            "rows": result.get("rows", []),
+            "csv": result.get("csv", ""),
+        }
+    )
 
 
 @app.post("/api/introspect")

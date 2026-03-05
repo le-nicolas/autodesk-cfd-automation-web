@@ -5,6 +5,7 @@ This project is a local web app and automation framework for Autodesk CFD that p
 - Config-driven case execution from CSV.
 - Direct CFD scripting execution via `CFD.exe -script`.
 - Study introspection (design/scenario/BC/material/part discovery).
+- Natural language to `cases.csv` generation (Ollama or Groq provider).
 - Automatic retries on failed cases.
 - Live log streaming into dashboard during active case execution.
 - Run modes:
@@ -74,6 +75,7 @@ Set your `.cfdst` path in either way:
 - `GET /api/cases`: load cases CSV + parsed rows.
 - `POST /api/cases`: save cases CSV.
 - `POST /api/introspect`: inspect current study via Autodesk CFD API.
+- `POST /api/llm/generate-cases`: generate case matrix from natural language (`apply=true` to persist).
 - `POST /api/run`: start run (`mode`: `all|failed|changed`).
 - `GET /api/status`: live status/logs.
 - `GET /api/latest-run`: latest run summary.
@@ -88,6 +90,46 @@ Set your `.cfdst` path in either way:
 - To force actual solves, set:
   - `solve.enabled: true`
   - optional `force_solve=true` in specific case rows.
+
+## LLM Case Builder
+
+You can generate `cases.csv` using plain language in the **LLM Case Builder** panel.
+
+Example prompt:
+
+`test inlet velocities from 1 to 5 m/s in 1 m/s steps with two turbulence models k-epsilon and k-omega while keeping ambient_temp_c at 25`
+
+### Provider Configuration
+
+`config/study_config.yaml` now includes:
+
+- `llm.provider`: `ollama` or `groq`
+- `llm.temperature`
+- `llm.max_rows`
+- `llm.ollama.*` (base URL, model, timeout)
+- `llm.groq.*` (base URL, model, API key env var, timeout)
+
+### Ollama Setup (local, no API key)
+
+1. Install Ollama (Windows):
+   - `winget install Ollama.Ollama`
+2. Pull a model:
+   - `ollama pull llama3.2:3b`
+3. Ensure service is running:
+   - `ollama list`
+4. Keep config at:
+   - `llm.provider: ollama`
+   - `llm.ollama.model: llama3.2:3b`
+
+Recommended baseline for low-memory laptops (8 GB RAM / 4 GB VRAM class): `llama3.2:3b`.
+
+### Groq Setup (cloud)
+
+1. Set key:
+   - `$env:GROQ_API_KEY=\"your-key\"`
+2. Set config:
+   - `llm.provider: groq`
+   - `llm.groq.model: llama-3.1-8b-instant`
 
 ## Failure Semantics and Retry Behavior
 

@@ -235,7 +235,8 @@ textarea {
 
 .half pre,
 #logs,
-#introspection {
+#introspection,
+#llmResult {
   min-height: 300px;
   max-height: 420px;
   overflow: auto;
@@ -247,6 +248,15 @@ textarea {
   font-family: Consolas, "Cascadia Mono", monospace;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.llm-prompt {
+  min-height: 120px;
+}
+
+#llmResult {
+  min-height: 120px;
+  max-height: 260px;
 }
 
 .status-line {
