@@ -6,6 +6,7 @@ This project is a local web app and automation framework for Autodesk CFD that p
 - Direct CFD scripting execution via `CFD.exe -script`.
 - Study introspection (design/scenario/BC/material/part discovery).
 - Automatic retries on failed cases.
+- Live log streaming into dashboard during active case execution.
 - Run modes:
   - `all`
   - `failed` (rerun failed only)
@@ -101,9 +102,23 @@ Failure reason is stored in `failure_reason` and shown in:
 
 - Dashboard results table.
 - Dashboard "Failure Reasons" section.
+- Live status panel while run is in progress.
 - Case result JSON in `runtime/runs/<run_id>/cases/<case_id>/attempt_<n>/case_result.json`.
 
 Retries are controlled by `automation.max_retries` in config.
+
+## CI (GitHub Actions)
+
+This repo includes CI at:
+
+- `.github/workflows/ci.yml`
+
+CI runs:
+
+- Python compile check.
+- `pytest` dry-run pipeline tests (`CFD_AUTOMATION_DRY_RUN=1`).
+
+Dry-run mode validates orchestration/post-processing behavior in `solve.enabled: false` flow without requiring Autodesk CFD on CI runners.
 
 ## API Security (Local Tool)
 

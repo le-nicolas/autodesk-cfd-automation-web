@@ -7,6 +7,7 @@ const ui = {
   runMode: document.getElementById("runMode"),
   caseCounter: document.getElementById("caseCounter"),
   currentCase: document.getElementById("currentCase"),
+  liveFailureWrap: document.getElementById("liveFailureWrap"),
   resultsLinks: document.getElementById("resultsLinks"),
   resultsTableWrap: document.getElementById("resultsTableWrap"),
   failureWrap: document.getElementById("failureWrap"),
@@ -90,6 +91,19 @@ function updateStatusView(status) {
   ui.logs.textContent = logLines.join("\n");
 
   ui.authBanner.classList.toggle("hidden", !status.auth_required);
+  renderLiveFailures(status.recent_failures || []);
+}
+
+function renderLiveFailures(items) {
+  ui.liveFailureWrap.innerHTML = "";
+  if (!items.length) return;
+  const latest = items.slice(-3).reverse();
+  for (const item of latest) {
+    const div = document.createElement("div");
+    div.className = "failure-item";
+    div.textContent = `${item.case_id} (attempt ${item.attempt}): ${item.reason || "Unknown failure"}`;
+    ui.liveFailureWrap.appendChild(div);
+  }
 }
 
 function renderLinks(summary) {
@@ -405,6 +419,6 @@ setInterval(async () => {
   } catch (err) {
     flash(`Auto-refresh failed: ${err.message}`);
   }
-}, 3500);
+}, 1000);
 
 boot();

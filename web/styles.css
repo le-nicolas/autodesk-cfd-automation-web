@@ -309,6 +309,10 @@ th {
   margin-top: 12px;
 }
 
+#liveFailureWrap {
+  margin-bottom: 8px;
+}
+
 .failure-item {
   border: 1px solid #fca5a5;
   background: #fef2f2;

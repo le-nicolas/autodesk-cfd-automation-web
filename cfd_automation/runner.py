@@ -134,6 +134,39 @@ class AutomationRunner:
                 return lines[-1][:500]
         return "Case failed for an unspecified reason."
 
+    @staticmethod
+    def _dry_run_case_result(
+        *,
+        case: dict[str, Any],
+        case_id: str,
+        run_id: str,
+        attempt: int,
+    ) -> dict[str, Any]:
+        metrics: dict[str, float] = {}
+        for key, value in case.items():
+            if key == "case_id":
+                continue
+            try:
+                metrics[key] = float(str(value))
+            except Exception:
+                continue
+
+        force_fail = str(case.get("force_fail", "")).strip().lower() in {"1", "true", "yes", "on"}
+        result = {
+            "case_id": case_id,
+            "run_id": run_id,
+            "attempt": attempt,
+            "success": not force_fail,
+            "messages": ["Dry-run mode: CFD execution was simulated."],
+            "warnings": [],
+            "metrics": metrics,
+            "screenshots": [],
+            "cutplanes": [],
+        }
+        if force_fail:
+            result["error"] = "Dry-run forced failure via case column force_fail=true."
+        return result
+
     def _emit(self, progress: ProgressFn | None, **event: Any) -> None:
         if progress:
             progress(event)
@@ -248,17 +281,24 @@ class AutomationRunner:
 
         cfg = self.get_config()
         cases = self.get_cases()
+        dry_run = os.environ.get("CFD_AUTOMATION_DRY_RUN", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         cfd_exe = cfg.get("automation", {}).get("cfd_executable")
-        if not cfd_exe:
-            raise ValueError("No Autodesk CFD executable configured.")
         study_path = str(cfg.get("study", {}).get("template_model", "")).strip()
-        if not study_path:
-            raise ValueError("No study.template_model configured.")
-        study_file = Path(study_path)
-        if study_file.suffix.lower() != ".cfdst":
-            raise ValueError(f"study.template_model must be a .cfdst file: {study_path}")
-        if not study_file.exists():
-            raise ValueError(f"Configured study file does not exist: {study_path}")
+        if not dry_run:
+            if not cfd_exe:
+                raise ValueError("No Autodesk CFD executable configured.")
+            if not study_path:
+                raise ValueError("No study.template_model configured.")
+            study_file = Path(study_path)
+            if study_file.suffix.lower() != ".cfdst":
+                raise ValueError(f"study.template_model must be a .cfdst file: {study_path}")
+            if not study_file.exists():
+                raise ValueError(f"Configured study file does not exist: {study_path}")
         solve_enabled = bool(cfg.get("solve", {}).get("enabled", False))
 
         timeout_seconds = int((cfg.get("automation", {}).get("timeout_minutes", 120) or 120) * 60)
@@ -279,6 +319,7 @@ class AutomationRunner:
             selected_cases=len(selected_cases),
             solve_enabled=solve_enabled,
             study_path=str(cfg.get("study", {}).get("template_model", "")),
+            dry_run=dry_run,
         )
 
         new_results: dict[str, dict[str, Any]] = {}
@@ -310,18 +351,71 @@ class AutomationRunner:
                 env = {
                     "CFD_AUTOMATION_PAYLOAD": str(payload_path),
                 }
-                run_info = run_cfd_script(
-                    cfd_executable=cfd_exe,
-                    script_path=self.case_script,
-                    env_overrides=env,
-                    timeout_seconds=timeout_seconds,
-                    workdir=self.project_root,
-                )
-
                 case_result_path = attempt_dir / "case_result.json"
-                case_result = read_json(case_result_path, default={}) or {}
-                if not isinstance(case_result, dict):
-                    case_result = {}
+                if dry_run:
+                    self._emit(
+                        progress,
+                        type="case_log",
+                        case_id=case_id,
+                        attempt=attempt,
+                        source="dry-run",
+                        line="Simulating CFD run in dry-run mode.",
+                    )
+                    run_info = {
+                        "returncode": 0,
+                        "timed_out": False,
+                        "stdout": "",
+                        "stderr": "",
+                        "log_path": "",
+                        "log_text": "",
+                    }
+                    case_result = self._dry_run_case_result(
+                        case=case,
+                        case_id=case_id,
+                        run_id=run_id,
+                        attempt=attempt,
+                    )
+                else:
+                    def driver_event(event: dict[str, Any]) -> None:
+                        if event.get("type") == "log_line":
+                            line = str(event.get("line", "")).strip()
+                            if not line:
+                                return
+                            self._emit(
+                                progress,
+                                type="case_log",
+                                case_id=case_id,
+                                attempt=attempt,
+                                source=str(event.get("source", "driver")),
+                                line=line[:600],
+                            )
+                        elif event.get("type") == "process_state":
+                            self._emit(
+                                progress,
+                                type="case_log",
+                                case_id=case_id,
+                                attempt=attempt,
+                                source="driver",
+                                line=(
+                                    f"process_state={event.get('state')} "
+                                    f"returncode={event.get('returncode')} "
+                                    f"timed_out={event.get('timed_out')}"
+                                ),
+                            )
+
+                    run_info = run_cfd_script(
+                        cfd_executable=cfd_exe,
+                        script_path=self.case_script,
+                        env_overrides=env,
+                        timeout_seconds=timeout_seconds,
+                        workdir=self.project_root,
+                        on_event=driver_event,
+                        log_watch_roots=[attempt_dir],
+                    )
+
+                    case_result = read_json(case_result_path, default={}) or {}
+                    if not isinstance(case_result, dict):
+                        case_result = {}
 
                 case_result.setdefault("case_id", case_id)
                 case_result.setdefault("attempt", attempt)
@@ -370,6 +464,14 @@ class AutomationRunner:
                 }
             last_result["attempts"] = int(last_result.get("attempt", max_retries + 1))
             new_results[case_id] = last_result
+            if not last_result.get("success"):
+                self._emit(
+                    progress,
+                    type="case_failed",
+                    case_id=case_id,
+                    attempt=last_result.get("attempt"),
+                    reason=last_result.get("failure_reason", last_result.get("error", "")),
+                )
 
             state[case_id] = {
                 "case_id": case_id,

@@ -94,13 +94,14 @@ class RunManager:
             "logs": [],
             "last_error": "",
             "last_summary": {},
+            "recent_failures": [],
         }
 
     def _append_log(self, line: str) -> None:
         logs = self._state.setdefault("logs", [])
         logs.append(f"[{utc_now_iso()}] {line}")
-        if len(logs) > 250:
-            del logs[:-250]
+        if len(logs) > 1200:
+            del logs[:-1200]
 
     def _handle_progress(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "event")
@@ -114,6 +115,8 @@ class RunManager:
                 self._append_log(
                     f"Run started. mode={self._state['mode']} selected={self._state['selected_case_count']}"
                 )
+                if bool(event.get("dry_run")):
+                    self._append_log("Info: dry-run mode is enabled (CFD execution simulated).")
                 if event.get("study_path"):
                     self._append_log(f"Study: {event.get('study_path')}")
                 if not bool(event.get("solve_enabled", False)):
@@ -137,6 +140,25 @@ class RunManager:
                     f"(attempt {event.get('attempt', 1)}/{event.get('max_attempts', 1)}) "
                     f"reason={event.get('reason', '')}"
                 )
+            elif event_type == "case_failed":
+                fail = {
+                    "case_id": event.get("case_id", ""),
+                    "attempt": event.get("attempt", 0),
+                    "reason": event.get("reason", ""),
+                }
+                failures = self._state.setdefault("recent_failures", [])
+                failures.append(fail)
+                if len(failures) > 50:
+                    del failures[:-50]
+                self._append_log(
+                    f"Case failed: {fail['case_id']} (attempt {fail['attempt']}), reason={fail['reason']}"
+                )
+            elif event_type == "case_log":
+                source = event.get("source", "driver")
+                case_id = event.get("case_id", "")
+                attempt = event.get("attempt", "")
+                line = event.get("line", "")
+                self._append_log(f"[{case_id}][attempt {attempt}][{source}] {line}")
             elif event_type == "run_finished":
                 self._state["last_summary"] = enrich_summary(event.get("summary", {}))
                 self._append_log("Run finished.")
@@ -153,6 +175,7 @@ class RunManager:
             self._state["last_error"] = ""
             self._state["logs"] = []
             self._state["last_summary"] = {}
+            self._state["recent_failures"] = []
 
         def worker() -> None:
             try:
