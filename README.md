@@ -23,21 +23,23 @@ Study used:
 - Design: `Design 1`
 - Scenario: `Scenario 1`
 
-Recorded on **March 5, 2026** from `runtime/design_loops/20260305_201335/loop_summary.json`:
+Recorded on **March 6, 2026** from `runtime/design_loops/20260306_025725/loop_summary.json`:
 
 - Objective: minimize `temp_max_c`
 - Constraints: `pressure_max_dyne_cm2 <= 1500` and `velocity_mag_max_cm_s >= 300`
-- Feasible-case temperature improved from `9,340,450,000` to `7,921,150,000` in 2 batches
-- Improvement: **15.2%** while keeping pressure within threshold (`1255.03` at best feasible case)
+- Loop completed: 4 batches, 12 successful solves, 0 failed solves
+- Feasible-case temperature improved from `11,633,900,000` to `6,863,200,000`
+- Improvement: **41.01%** while keeping pressure within threshold (`1314.21` at best feasible case)
 
 Quick evidence:
 
 | Run Artifact | Value |
 |---|---|
-| Loop ID | `20260305_201335` |
-| Batch 1 best feasible | `LOOP_B01_C002` (`temp_max_c=9340450000`) |
-| Batch 2 best feasible | `LOOP_B02_C001` (`temp_max_c=7921150000`) |
-| Improvement | `15.2%` |
+| Loop ID | `20260306_025725` |
+| Batch run IDs | `20260306_025725`, `20260306_040510`, `20260306_050323`, `20260306_055855` |
+| Best feasible case | `LOOP_B02_C003` (`temp_max_c=6863200000`, `pressure_max_dyne_cm2=1314.21`) |
+| Worst feasible case in same loop | `LOOP_B01_C003` (`temp_max_c=11633900000`) |
+| Feasible improvement | `41.01%` |
 
 ### Demo Outputs
 
