@@ -324,3 +324,67 @@ def test_design_loop_start_endpoint_success(monkeypatch) -> None:
     payload = response.get_json()
     assert response.status_code == 200
     assert payload["ok"] is True
+
+
+def test_surrogate_status_endpoint(monkeypatch) -> None:
+    import app as web_app
+
+    monkeypatch.setattr(web_app.surrogate_engine, "status", lambda: {"trained": False, "ready": False})
+    client = web_app.app.test_client()
+    response = client.get("/api/surrogate/status")
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["result"]["trained"] is False
+
+
+def test_api_run_predict_mode(monkeypatch) -> None:
+    import app as web_app
+
+    monkeypatch.setattr(web_app, "API_KEY", "")
+    monkeypatch.setattr(web_app.design_loop_manager, "get", lambda: {"running": False})
+    monkeypatch.setattr(
+        web_app.surrogate_engine,
+        "predict_mode",
+        lambda _payload: {"rows_evaluated": 10, "top_candidates": []},
+    )
+
+    client = web_app.app.test_client()
+    response = client.post("/api/run", json={"mode": "predict", "search_space": [{"name": "x", "type": "real", "min": 0, "max": 1}]})
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert payload["mode"] == "predict"
+    assert payload["result"]["rows_evaluated"] == 10
+
+
+def test_api_run_validate_mode_uses_background_task(monkeypatch) -> None:
+    import app as web_app
+
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(web_app, "API_KEY", "")
+    monkeypatch.setattr(web_app.design_loop_manager, "get", lambda: {"running": False})
+    monkeypatch.setattr(web_app.run_manager, "get", lambda: {"running": False})
+
+    def fake_start(mode: str, task: Any = None) -> tuple[bool, str]:
+        captured["mode"] = mode
+        captured["task_is_callable"] = callable(task)
+        return True, "Run started."
+
+    monkeypatch.setattr(web_app.run_manager, "start", fake_start)
+
+    client = web_app.app.test_client()
+    response = client.post(
+        "/api/run",
+        json={
+            "mode": "validate",
+            "objective_alias": "temp_max_c",
+            "search_space": [{"name": "inlet_velocity_ms", "type": "real", "min": 1, "max": 5}],
+        },
+    )
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["ok"] is True
+    assert captured["mode"] == "validate"
+    assert captured["task_is_callable"] is True

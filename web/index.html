@@ -130,6 +130,41 @@
       <pre id="loopStatus"></pre>
     </section>
 
+    <section class="panel">
+      <h2>Surrogate Intelligence (v5.0)</h2>
+      <p class="helper">
+        Train a surrogate model from `runtime/runs` + `runtime/design_loops`, predict thousands of parameter combinations instantly, then validate only top candidates with real CFD.
+      </p>
+      <div class="study-row">
+        <input id="surrogateObjectiveAlias" type="text" placeholder="Objective alias (e.g., temp_max_c)">
+        <select id="surrogateObjectiveGoal">
+          <option value="min">Goal: Minimize</option>
+          <option value="max">Goal: Maximize</option>
+        </select>
+      </div>
+      <div class="study-row">
+        <input id="surrogateSampleCount" type="number" min="1" max="100000" placeholder="Predict sample count (e.g., 10000)">
+        <input id="surrogateTopN" type="number" min="1" max="5000" placeholder="Top N to surface (e.g., 25)">
+        <input id="surrogateValidateTopN" type="number" min="1" max="100" placeholder="Validate top N (e.g., 3)">
+        <input id="surrogateMinRows" type="number" min="5" max="10000" placeholder="Train min rows (default 50)">
+      </div>
+      <p class="helper">Search Space JSON</p>
+      <textarea id="surrogateSearchSpace" class="llm-prompt" spellcheck="false" placeholder='[{"name":"inlet_velocity_ms","type":"real","min":1,"max":5},{"name":"ambient_temp_c","type":"real","min":20,"max":40},{"name":"total_heat_w","type":"real","min":50,"max":120}]'></textarea>
+      <p class="helper">Constraints JSON (optional)</p>
+      <textarea id="surrogateConstraints" class="llm-prompt" spellcheck="false" placeholder='[{"alias":"pressure_max_dyne_cm2","operator":"<=","threshold":2000}]'></textarea>
+      <p class="helper">Fixed Values JSON (optional)</p>
+      <textarea id="surrogateFixedValues" class="llm-prompt" spellcheck="false" placeholder='{}'></textarea>
+      <div class="actions">
+        <button id="surrogateTrainBtn">Train / Retrain Surrogate</button>
+        <button id="surrogateRefreshBtn">Refresh Surrogate Status</button>
+        <button id="surrogatePredictBtn" class="accent">Predict</button>
+        <button id="surrogateValidateBtn">Validate Top N</button>
+      </div>
+      <pre id="surrogateStatus"></pre>
+      <pre id="surrogatePredictOutput"></pre>
+      <pre id="surrogateCoverage"></pre>
+    </section>
+
     <section class="grid">
       <article class="panel half">
         <h2>Live Status</h2>

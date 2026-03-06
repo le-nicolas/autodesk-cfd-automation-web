@@ -46,6 +46,22 @@ const ui = {
   solveBanner: document.getElementById("solveBanner"),
   authBanner: document.getElementById("authBanner"),
   apiKeyInput: document.getElementById("apiKeyInput"),
+  surrogateObjectiveAlias: document.getElementById("surrogateObjectiveAlias"),
+  surrogateObjectiveGoal: document.getElementById("surrogateObjectiveGoal"),
+  surrogateSampleCount: document.getElementById("surrogateSampleCount"),
+  surrogateTopN: document.getElementById("surrogateTopN"),
+  surrogateValidateTopN: document.getElementById("surrogateValidateTopN"),
+  surrogateMinRows: document.getElementById("surrogateMinRows"),
+  surrogateSearchSpace: document.getElementById("surrogateSearchSpace"),
+  surrogateConstraints: document.getElementById("surrogateConstraints"),
+  surrogateFixedValues: document.getElementById("surrogateFixedValues"),
+  surrogateTrainBtn: document.getElementById("surrogateTrainBtn"),
+  surrogateRefreshBtn: document.getElementById("surrogateRefreshBtn"),
+  surrogatePredictBtn: document.getElementById("surrogatePredictBtn"),
+  surrogateValidateBtn: document.getElementById("surrogateValidateBtn"),
+  surrogateStatus: document.getElementById("surrogateStatus"),
+  surrogatePredictOutput: document.getElementById("surrogatePredictOutput"),
+  surrogateCoverage: document.getElementById("surrogateCoverage"),
 };
 
 let currentConfig = null;
@@ -347,6 +363,42 @@ async function loadConfig() {
   if (!ui.loopFixedValues.value) {
     ui.loopFixedValues.value = JSON.stringify({}, null, 2);
   }
+  if (!ui.surrogateObjectiveAlias.value) {
+    const ranking = (config && config.ranking) || [];
+    if (ranking.length && ranking[0].alias) {
+      ui.surrogateObjectiveAlias.value = String(ranking[0].alias);
+      ui.surrogateObjectiveGoal.value = String(ranking[0].goal || "min").toLowerCase() === "max" ? "max" : "min";
+    }
+  }
+  if (!ui.surrogateSampleCount.value) {
+    ui.surrogateSampleCount.value = "10000";
+  }
+  if (!ui.surrogateTopN.value) {
+    ui.surrogateTopN.value = "25";
+  }
+  if (!ui.surrogateValidateTopN.value) {
+    ui.surrogateValidateTopN.value = "3";
+  }
+  if (!ui.surrogateMinRows.value) {
+    ui.surrogateMinRows.value = "50";
+  }
+  if (!ui.surrogateSearchSpace.value) {
+    ui.surrogateSearchSpace.value = JSON.stringify(
+      [
+        { name: "inlet_velocity_ms", type: "real", min: 1, max: 5 },
+        { name: "ambient_temp_c", type: "real", min: 20, max: 40 },
+        { name: "total_heat_w", type: "real", min: 50, max: 120 },
+      ],
+      null,
+      2
+    );
+  }
+  if (!ui.surrogateConstraints.value) {
+    ui.surrogateConstraints.value = JSON.stringify((config && config.criteria) || [], null, 2);
+  }
+  if (!ui.surrogateFixedValues.value) {
+    ui.surrogateFixedValues.value = JSON.stringify({}, null, 2);
+  }
   syncStudyPathInput();
   updateSolveBanner();
 }
@@ -552,6 +604,187 @@ async function refreshDesignLoopStatus() {
   renderDesignLoopStatus(payload);
 }
 
+function renderCoverageMap(coveragePayload) {
+  if (!coveragePayload || !coveragePayload.map || !Array.isArray(coveragePayload.map.cells)) {
+    ui.surrogateCoverage.textContent = "Coverage map unavailable.";
+    return;
+  }
+  const map = coveragePayload.map;
+  const cells = map.cells || [];
+  if (!cells.length) {
+    ui.surrogateCoverage.textContent = "Coverage map unavailable.";
+    return;
+  }
+  const symbols = { 0: "░", 1: "▓", 2: "█" };
+  const lines = [];
+  lines.push(`Coverage Map: ${map.y_feature || "-"} vs ${map.x_feature || "-"}`);
+  for (const row of cells) {
+    const chars = row.map((value) => symbols[value] || "░").join("");
+    lines.push(chars);
+  }
+  lines.push("Legend: █ high  ▓ medium  ░ low");
+  ui.surrogateCoverage.textContent = lines.join("\n");
+}
+
+function renderSurrogateStatus(statusPayload, coveragePayload) {
+  const result = (statusPayload && statusPayload.result) || {};
+  const lines = [];
+  lines.push(`Trained: ${result.trained ? "yes" : "no"}`);
+  lines.push(`Ready: ${result.ready ? "yes" : "no"}`);
+  lines.push(`Model: ${result.model_name || "-"}`);
+  lines.push(`Objective alias: ${result.target_alias || "-"}`);
+  lines.push(`Rows: ${result.row_count || 0}`);
+  const r2 = Number(result.best_r2);
+  if (Number.isFinite(r2)) {
+    lines.push(`R2: ${r2.toFixed(4)}`);
+  }
+  const coverageOverall = Number(result.coverage && result.coverage.overall);
+  if (Number.isFinite(coverageOverall)) {
+    lines.push(`Coverage: ${(coverageOverall * 100).toFixed(1)}%`);
+  }
+  if (result.message) {
+    lines.push(`Info: ${result.message}`);
+  }
+  if (result.training_data_csv) {
+    lines.push(`Training data: ${result.training_data_csv}`);
+  }
+  ui.surrogateStatus.textContent = lines.join("\n");
+  renderCoverageMap((coveragePayload && coveragePayload.result) || {});
+}
+
+function buildSurrogatePayload() {
+  const objectiveAlias = (ui.surrogateObjectiveAlias.value || "").trim();
+  if (!objectiveAlias) {
+    throw new Error("Surrogate objective alias is required.");
+  }
+  const objectiveGoal = (ui.surrogateObjectiveGoal.value || "min").trim().toLowerCase() === "max" ? "max" : "min";
+  const sampleCount = Number.parseInt((ui.surrogateSampleCount.value || "10000").trim(), 10);
+  const topN = Number.parseInt((ui.surrogateTopN.value || "25").trim(), 10);
+  const validateTopN = Number.parseInt((ui.surrogateValidateTopN.value || "3").trim(), 10);
+  const minRows = Number.parseInt((ui.surrogateMinRows.value || "50").trim(), 10);
+  if (!Number.isFinite(sampleCount) || sampleCount <= 0) {
+    throw new Error("Sample count must be a positive integer.");
+  }
+  if (!Number.isFinite(topN) || topN <= 0) {
+    throw new Error("Top N must be a positive integer.");
+  }
+  if (!Number.isFinite(validateTopN) || validateTopN <= 0) {
+    throw new Error("Validate Top N must be a positive integer.");
+  }
+  if (!Number.isFinite(minRows) || minRows <= 0) {
+    throw new Error("Train min rows must be a positive integer.");
+  }
+
+  const searchSpace = parseJsonField(ui.surrogateSearchSpace.value, "Surrogate Search Space", []);
+  const constraints = parseJsonField(ui.surrogateConstraints.value, "Surrogate Constraints", []);
+  const fixedValues = parseJsonField(ui.surrogateFixedValues.value, "Surrogate Fixed Values", {});
+  if (!Array.isArray(searchSpace) || !searchSpace.length) {
+    throw new Error("Surrogate Search Space must be a non-empty JSON array.");
+  }
+  if (!Array.isArray(constraints)) {
+    throw new Error("Surrogate Constraints must be a JSON array.");
+  }
+  if (typeof fixedValues !== "object" || fixedValues === null || Array.isArray(fixedValues)) {
+    throw new Error("Surrogate Fixed Values must be a JSON object.");
+  }
+
+  return {
+    objective_alias: objectiveAlias,
+    objective_goal: objectiveGoal,
+    sample_count: sampleCount,
+    top_n: topN,
+    validate_top_n: validateTopN,
+    min_rows: minRows,
+    search_space: searchSpace,
+    constraints,
+    fixed_values: fixedValues,
+  };
+}
+
+async function refreshSurrogateStatus() {
+  const [statusPayload, coveragePayload] = await Promise.all([
+    callApi("/api/surrogate/status"),
+    callApi("/api/surrogate/coverage"),
+  ]);
+  renderSurrogateStatus(statusPayload, coveragePayload);
+}
+
+async function trainSurrogate() {
+  const body = buildSurrogatePayload();
+  const payload = await callApi("/api/surrogate/train", {
+    method: "POST",
+    body: JSON.stringify({
+      objective_alias: body.objective_alias,
+      min_rows: body.min_rows,
+      include_design_loops: true,
+    }),
+  });
+  flash(`Surrogate training complete: ${payload.result.model_name || "model selected"}.`);
+  await refreshSurrogateStatus();
+}
+
+async function predictSurrogate() {
+  const body = buildSurrogatePayload();
+  const payload = await callApi("/api/surrogate/predict", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  const result = payload.result || {};
+  const lines = [];
+  lines.push(`Rows evaluated: ${result.rows_evaluated || result.sample_count || 0}`);
+  lines.push(`Model: ${result.model_name || "-"}`);
+  if (Number.isFinite(result.best_r2)) {
+    lines.push(`R2: ${Number(result.best_r2).toFixed(4)}`);
+  }
+  lines.push(`Low-confidence cases: ${result.low_confidence_count || 0}`);
+  lines.push("");
+  lines.push("Top candidates:");
+  const top = Array.isArray(result.top_candidates) ? result.top_candidates : [];
+  if (!top.length) {
+    lines.push("(none)");
+  } else {
+    for (const item of top.slice(0, 20)) {
+      lines.push(
+        `#${item.rank || "-"} ${item.case_id || "-"} ` +
+        `pred=${item.prediction} conf=${(Number(item.confidence || 0) * 100).toFixed(1)}% ` +
+        `(${item.confidence_level || "low"})`
+      );
+      lines.push(`  params=${JSON.stringify(item.params || {})}`);
+      if (Array.isArray(item.constraint_violations) && item.constraint_violations.length) {
+        lines.push(`  violations=${item.constraint_violations.join("; ")}`);
+      }
+    }
+  }
+  if (Array.isArray(result.warnings) && result.warnings.length) {
+    lines.push("");
+    lines.push("Warnings:");
+    result.warnings.slice(0, 10).forEach((line) => lines.push(`- ${line}`));
+  }
+  ui.surrogatePredictOutput.textContent = lines.join("\n");
+  flash(`Surrogate predicted ${result.rows_evaluated || 0} combinations.`);
+}
+
+async function validateSurrogate() {
+  const body = buildSurrogatePayload();
+  const payload = await callApi("/api/run", {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "validate",
+      objective_alias: body.objective_alias,
+      objective_goal: body.objective_goal,
+      sample_count: body.sample_count,
+      top_n: body.top_n,
+      validate_top_n: body.validate_top_n,
+      search_space: body.search_space,
+      constraints: body.constraints,
+      fixed_values: body.fixed_values,
+      auto_retrain: true,
+      retrain_min_rows: body.min_rows,
+    }),
+  });
+  flash(payload.message || "Validate mode started.");
+}
+
 async function discoverStudies() {
   const payload = await callApi("/api/studies");
   fillStudyCandidates(payload.studies || []);
@@ -588,7 +821,14 @@ async function refreshLatestRun() {
 
 async function boot() {
   try {
-    await Promise.all([loadConfig(), loadCases(), refreshStatus(), refreshLatestRun(), refreshDesignLoopStatus()]);
+    await Promise.all([
+      loadConfig(),
+      loadCases(),
+      refreshStatus(),
+      refreshLatestRun(),
+      refreshDesignLoopStatus(),
+      refreshSurrogateStatus(),
+    ]);
   } catch (err) {
     flash(`Initial load failed: ${err.message}`);
   }
@@ -746,11 +986,48 @@ ui.loopStopBtn.addEventListener("click", async () => {
   }
 });
 
+ui.surrogateTrainBtn.addEventListener("click", async () => {
+  try {
+    await trainSurrogate();
+  } catch (err) {
+    flash(`Surrogate train failed: ${err.message}`);
+    ui.surrogateStatus.textContent = `Surrogate train failed: ${err.message}`;
+  }
+});
+
+ui.surrogateRefreshBtn.addEventListener("click", async () => {
+  try {
+    await refreshSurrogateStatus();
+    flash("Surrogate status refreshed.");
+  } catch (err) {
+    flash(`Surrogate refresh failed: ${err.message}`);
+  }
+});
+
+ui.surrogatePredictBtn.addEventListener("click", async () => {
+  try {
+    await predictSurrogate();
+  } catch (err) {
+    flash(`Surrogate predict failed: ${err.message}`);
+    ui.surrogatePredictOutput.textContent = `Surrogate predict failed: ${err.message}`;
+  }
+});
+
+ui.surrogateValidateBtn.addEventListener("click", async () => {
+  try {
+    await validateSurrogate();
+  } catch (err) {
+    flash(`Surrogate validate failed: ${err.message}`);
+    ui.surrogatePredictOutput.textContent = `Surrogate validate failed: ${err.message}`;
+  }
+});
+
 setInterval(async () => {
   try {
     await refreshStatus();
     await refreshLatestRun();
     await refreshDesignLoopStatus();
+    await refreshSurrogateStatus();
   } catch (err) {
     flash(`Auto-refresh failed: ${err.message}`);
   }

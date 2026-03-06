@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Any
+from typing import Any, Callable
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -14,12 +14,14 @@ from cfd_automation import (
     GenerativeDesignLoop,
     LLMCaseGenerator,
     LLMMeshAdvisor,
+    SurrogateEngine,
 )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 runner = AutomationRunner(PROJECT_ROOT)
 design_loop_engine = GenerativeDesignLoop(runner)
+surrogate_engine = SurrogateEngine(PROJECT_ROOT, runner)
 API_KEY = os.environ.get("CFD_AUTOMATION_API_KEY", "").strip()
 
 app = Flask(
@@ -148,7 +150,12 @@ class RunManager:
         with self._lock:
             if event_type == "run_started":
                 self._state["run_id"] = event.get("run_id", "")
-                self._state["mode"] = event.get("mode", "")
+                incoming_mode = str(event.get("mode", "")).strip()
+                current_mode = str(self._state.get("mode", "")).strip()
+                if current_mode == "validate" and incoming_mode == "all":
+                    pass
+                else:
+                    self._state["mode"] = incoming_mode
                 self._state["selected_case_count"] = int(event.get("selected_cases", 0))
                 self._state["completed_case_count"] = 0
                 self._state["current_case"] = ""
@@ -215,11 +222,16 @@ class RunManager:
             else:
                 self._append_log(str(event))
 
-    def start(self, mode: str) -> tuple[bool, str]:
+    def start(
+        self,
+        mode: str,
+        task: Callable[[Callable[[dict[str, Any]], None]], dict[str, Any]] | None = None,
+    ) -> tuple[bool, str]:
         with self._lock:
             if self._state.get("running"):
                 return False, "A run is already in progress."
             self._state["running"] = True
+            self._state["mode"] = mode
             self._state["started_at"] = utc_now_iso()
             self._state["finished_at"] = ""
             self._state["last_error"] = ""
@@ -229,7 +241,10 @@ class RunManager:
 
         def worker() -> None:
             try:
-                summary = runner.run(mode=mode, progress=self._handle_progress)
+                if task is not None:
+                    summary = task(self._handle_progress)
+                else:
+                    summary = runner.run(mode=mode, progress=self._handle_progress)
                 with self._lock:
                     self._state["last_summary"] = enrich_summary(summary)
             except Exception as ex:
@@ -595,9 +610,80 @@ def api_run():
     if design_loop_manager.get().get("running"):
         return jsonify({"ok": False, "message": "Design loop is running. Stop it before manual run."}), 409
     payload = request.get_json(force=True, silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Request body must be a JSON object."}), 400
     mode = str(payload.get("mode", "all")).lower()
+
+    if mode == "predict":
+        try:
+            result = surrogate_engine.predict_mode(payload)
+        except ValueError as ex:
+            return jsonify({"ok": False, "error": str(ex)}), 400
+        except RuntimeError as ex:
+            return jsonify({"ok": False, "error": str(ex)}), 502
+        return jsonify({"ok": True, "mode": "predict", "result": result})
+
+    if mode == "validate":
+        if run_manager.get().get("running"):
+            return jsonify({"ok": False, "message": "A run is already in progress."}), 409
+
+        def validate_task(progress_cb: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+            return surrogate_engine.validate_mode(payload, progress=progress_cb)
+
+        started, message = run_manager.start("validate", task=validate_task)
+        return jsonify({"ok": started, "message": message})
+
     started, message = run_manager.start(mode)
     return jsonify({"ok": started, "message": message})
+
+
+@app.post("/api/surrogate/train")
+def api_surrogate_train():
+    auth = require_api_key()
+    if auth:
+        return auth
+    payload = request.get_json(force=True, silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Request body must be a JSON object."}), 400
+
+    try:
+        result = surrogate_engine.train(
+            objective_alias=str(payload.get("objective_alias", "")).strip() or None,
+            include_design_loops=bool(payload.get("include_design_loops", True)),
+            min_rows=max(5, int(payload.get("min_rows", 50))),
+        )
+    except ValueError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 400
+    except RuntimeError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 502
+    return jsonify({"ok": True, "result": result})
+
+
+@app.get("/api/surrogate/status")
+def api_surrogate_status():
+    return jsonify({"ok": True, "result": surrogate_engine.status()})
+
+
+@app.post("/api/surrogate/predict")
+def api_surrogate_predict():
+    auth = require_api_key()
+    if auth:
+        return auth
+    payload = request.get_json(force=True, silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Request body must be a JSON object."}), 400
+    try:
+        result = surrogate_engine.predict_mode(payload)
+    except ValueError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 400
+    except RuntimeError as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 502
+    return jsonify({"ok": True, "result": result})
+
+
+@app.get("/api/surrogate/coverage")
+def api_surrogate_coverage():
+    return jsonify({"ok": True, "result": surrogate_engine.coverage()})
 
 
 @app.get("/api/status")

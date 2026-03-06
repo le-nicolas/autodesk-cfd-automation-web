@@ -238,7 +238,10 @@ textarea {
 #introspection,
 #llmResult,
 #meshResult,
-#loopStatus {
+#loopStatus,
+#surrogateStatus,
+#surrogatePredictOutput,
+#surrogateCoverage {
   min-height: 300px;
   max-height: 420px;
   overflow: auto;
@@ -258,7 +261,10 @@ textarea {
 
 #llmResult,
 #meshResult,
-#loopStatus {
+#loopStatus,
+#surrogateStatus,
+#surrogatePredictOutput,
+#surrogateCoverage {
   min-height: 120px;
   max-height: 260px;
 }

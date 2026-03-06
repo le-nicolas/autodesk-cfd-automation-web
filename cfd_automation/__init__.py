@@ -8,6 +8,7 @@ from .config_io import (
 from .design_loop import GenerativeDesignLoop
 from .llm_cases import LLMCaseGenerator, LLMMeshAdvisor, LLMOptimizerNarrator
 from .runner import AutomationRunner
+from .surrogate import SurrogateEngine
 
 __all__ = [
     "AutomationRunner",
@@ -15,6 +16,7 @@ __all__ = [
     "LLMCaseGenerator",
     "LLMOptimizerNarrator",
     "LLMMeshAdvisor",
+    "SurrogateEngine",
     "DEFAULT_CONFIG",
     "load_config",
     "save_config",

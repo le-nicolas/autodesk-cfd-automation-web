@@ -76,7 +76,7 @@ Min element size: 0.001m
 
 ### 6. Choose Your Run Mode
 
-You have three ways to run CADEX depending on what you need:
+You have four ways to run CADEX depending on what you need:
 
 ---
 
@@ -133,6 +133,17 @@ Batch 2 → runs 10 smarter cases → reads results
 Batch 5 → converged → optimal design found
 ```
 - Click **Stop Loop** anytime for graceful exit
+
+---
+
+#### Mode D — Surrogate Predict + Validate (v5.0)
+Best for: fast design-space exploration with CFD used only for top-candidate verification.
+
+In the **Surrogate Intelligence (v5.0)** panel:
+
+1. Click **Train / Retrain Surrogate**.
+2. Click **Predict** to score large sampled search spaces instantly.
+3. Click **Validate Top N** to run real CFD only on top predicted candidates.
 
 ---
 
@@ -194,6 +205,8 @@ Script failure → retries as-is
   - `all`
   - `failed` (rerun failed only)
   - `changed` (rerun cases whose inputs/config changed)
+  - `predict` (surrogate-only prediction; no CFD solve)
+  - `validate` (surrogate selects top candidates, then real CFD validation run)
 - Output generation:
   - per-case summary CSV
   - per-case metrics CSV
@@ -259,11 +272,15 @@ Set your `.cfdst` path in either way:
 - `POST /api/introspect`: inspect current study via Autodesk CFD API.
 - `POST /api/llm/generate-cases`: generate case matrix from natural language (`apply=true` to persist).
 - `POST /api/llm/suggest-mesh`: suggest mesh defaults + mesh gate thresholds (`apply=true` to persist).
-- `POST /api/run`: start run (`mode`: `all|failed|changed`).
+- `POST /api/run`: run orchestration (`mode`: `all|failed|changed|predict|validate`).
 - `POST /api/design-loop/start`: start closed-loop optimization batches.
 - `POST /api/design-loop/stop`: request graceful stop.
 - `GET /api/design-loop/status`: live loop state/logs.
 - `GET /api/design-loop/latest`: latest completed loop summary.
+- `POST /api/surrogate/train`: train/retrain surrogate from runtime history.
+- `GET /api/surrogate/status`: surrogate readiness/model stats.
+- `POST /api/surrogate/predict`: score rows/search-space with confidence.
+- `GET /api/surrogate/coverage`: surrogate coverage map payload.
 - `GET /api/status`: live status/logs.
 - `GET /api/latest-run`: latest run summary.
 - `GET /api/studies`: discover `.cfdst` files on this machine.
@@ -363,6 +380,31 @@ This is the automated loop:
 - Loop artifacts are saved in `runtime/design_loops/<loop_id>/`.
 - Loop can be started/stopped from the web dashboard section **Generative Design Loop**.
 - Constraint aliases must match configured metric aliases (for example `pressure_max_dyne_cm2`).
+
+## Surrogate Intelligence (v5.0)
+
+CADEX can now train a surrogate model from historical CFD results under:
+
+- `runtime/runs/`
+- `runtime/design_loops/`
+
+The workflow is:
+
+1. Train surrogate (`POST /api/surrogate/train` or dashboard button).
+2. Predict thousands of combinations in seconds (`/api/surrogate/predict` or `POST /api/run` with `mode=predict`).
+3. Validate only top-N candidates with real CFD (`POST /api/run` with `mode=validate`).
+4. Auto-retrain using newly validated data (optional, enabled by default in validate mode).
+
+Status and coverage:
+
+- `GET /api/surrogate/status` returns model info (`model_name`, `row_count`, `best_r2`, readiness).
+- `GET /api/surrogate/coverage` returns feature coverage + map data used in the dashboard.
+
+Notes:
+
+- Minimum recommended historical rows for stable behavior: `50+` (better at `200+`).
+- Constraint aliases in predict/validate should use configured metric aliases. Surrogate constraints only evaluate aliases the model predicts.
+- Optional model booster: install `xgboost` to enable XGBoost candidate training automatically.
 
 ## LLM Case Builder
 
@@ -565,7 +607,7 @@ Optional protection:
 2. Restart server.
 3. Use the top-right API key field in the web console (sent as `X-API-Key`).
 
-When enabled, mutating endpoints (`POST /api/config`, `POST /api/cases`, `POST /api/introspect`, `POST /api/run`, `POST /api/llm/generate-cases`, `POST /api/llm/suggest-mesh`, `POST /api/design-loop/start`, `POST /api/design-loop/stop`) require the key.
+When enabled, mutating endpoints (`POST /api/config`, `POST /api/cases`, `POST /api/introspect`, `POST /api/run`, `POST /api/llm/generate-cases`, `POST /api/llm/suggest-mesh`, `POST /api/design-loop/start`, `POST /api/design-loop/stop`, `POST /api/surrogate/train`, `POST /api/surrogate/predict`) require the key.
 
 ## Example Workflow
 
