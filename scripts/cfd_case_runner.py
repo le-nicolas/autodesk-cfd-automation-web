@@ -232,7 +232,7 @@ def part_matches(part, match):
 
 def find_targets(scenario, target_type, match):
     target_type = str(target_type or "scenario").strip().lower()
-    if target_type == "scenario":
+    if target_type in {"scenario", "scenario_setting", "scenario_settings"}:
         return [scenario]
     if target_type in {"boundary_condition", "boundary_conditions", "boundary", "bc"}:
         bcs = S.BCList()
@@ -308,12 +308,16 @@ def _normalize_mapping(mapping):
     property_aliases = mapping.get("property_aliases", [])
     if not isinstance(property_aliases, list):
         property_aliases = []
+    values_map = mapping.get("values", {})
+    if not isinstance(values_map, dict):
+        values_map = {}
 
     return {
         "source_column": source_column,
         "target_type": target_type,
         "property": property_name,
         "property_aliases": property_aliases,
+        "values": values_map,
         "units": units,
         "match": match,
     }
@@ -335,6 +339,30 @@ def _set_object_property_with_aliases(target, property_names, raw_value, units=N
     if last_error is not None:
         raise last_error
     raise RuntimeError("No property names were provided.")
+
+
+def _normalize_lookup_token(value):
+    parsed = parse_scalar(value)
+    if isinstance(parsed, bool):
+        return str(parsed).lower()
+    if isinstance(parsed, (int, float)):
+        return str(parsed)
+    return str(parsed).strip().lower()
+
+
+def _resolve_mapping_value(raw_value, values_map):
+    if raw_value in (None, ""):
+        return True, raw_value, ""
+    if not isinstance(values_map, dict) or not values_map:
+        return True, raw_value, ""
+
+    raw_token = _normalize_lookup_token(raw_value)
+    for key, mapped in values_map.items():
+        if _normalize_lookup_token(key) == raw_token:
+            return True, mapped, str(key)
+
+    known = ", ".join(str(key) for key in values_map.keys())
+    return False, raw_value, known
 
 
 def _normalize_fluid_preset_properties(raw_properties):
@@ -492,7 +520,15 @@ def apply_parameter_mappings(scenario, case_row, mappings, messages, warnings):
         match = mapping.get("match", {})
         property_name = mapping.get("property", "value")
         property_aliases = mapping.get("property_aliases", [])
+        values_map = mapping.get("values", {})
         units = mapping.get("units")
+        resolved_ok, resolved_value, matched_label = _resolve_mapping_value(raw_value, values_map)
+        if not resolved_ok:
+            warnings.append(
+                f"Mapping '{source_column}' value '{raw_value}' is not in values lookup. "
+                f"Known keys: {matched_label}"
+            )
+            continue
 
         targets = find_targets(scenario, target_type, match)
         if not targets:
@@ -507,7 +543,7 @@ def apply_parameter_mappings(scenario, case_row, mappings, messages, warnings):
                 _set_object_property_with_aliases(
                     target,
                     [property_name] + list(property_aliases),
-                    raw_value,
+                    resolved_value,
                     units=units,
                 )
             except Exception as ex:
@@ -515,6 +551,11 @@ def apply_parameter_mappings(scenario, case_row, mappings, messages, warnings):
                     f"Failed to set {property_name} for {target_type} "
                     f"from '{source_column}': {ex}"
                 )
+        if matched_label:
+            messages.append(
+                f"Mapping '{source_column}' value '{raw_value}' resolved via values lookup key "
+                f"'{matched_label}' -> '{resolved_value}'."
+            )
         messages.append(
             f"Applied mapping '{source_column}' -> {target_type}.{property_name} "
             f"for {len(targets)} target(s)."

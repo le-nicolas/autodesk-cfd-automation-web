@@ -270,6 +270,7 @@ class LLMCaseGenerator:
                     "target_name": match.get("name", ""),
                     "match_type": match.get("type", ""),
                     "property": item.get("property", ""),
+                    "values": item.get("values", {}) if isinstance(item.get("values", {}), dict) else {},
                     "units": item.get("units", ""),
                 }
             )
@@ -455,6 +456,7 @@ class LLMMeshAdvisor:
                     "target_type": mapping.get("target_type", ""),
                     "target_name": match.get("name", ""),
                     "match_type": match.get("type", ""),
+                    "values": mapping.get("values", {}) if isinstance(mapping.get("values", {}), dict) else {},
                     "units": mapping.get("units", ""),
                 }
             )

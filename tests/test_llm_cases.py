@@ -79,6 +79,7 @@ def test_llm_generator_supports_param_mapping_alias() -> None:
                 "target_type": "material",
                 "target_name": "air",
                 "property": "dynamic_viscosity",
+                "values": {"low": 0.001, "high": 0.01},
                 "units": "Pa.s",
             }
         ]
@@ -95,6 +96,8 @@ def test_llm_generator_supports_param_mapping_alias() -> None:
     assert "fluid_viscosity" in serialized_messages
     assert "target_name" in serialized_messages
     assert "air" in serialized_messages
+    assert "values" in serialized_messages
+    assert "low" in serialized_messages
     assert "fluid_viscosity" in result["csv"]
 
 

@@ -379,6 +379,8 @@ Important: turbulence-model sweeps only change simulation inputs when you have m
 
 - `param` as alias for `source_column`
 - `target_name` as alias for `match.name`
+- `scenario_setting` as a valid `target_type` alias for scenario-level property updates
+- `values` lookup maps categorical inputs to engine values before write
 
 Example:
 
@@ -396,6 +398,24 @@ parameter_mappings:
     property: dynamic_viscosity
     units: Pa.s
 ```
+
+### Turbulence Model Switching
+
+You can switch turbulence models per case using a scenario-level mapped lookup:
+
+```yaml
+parameter_mappings:
+  - param: turbulence_model
+    target_type: scenario_setting
+    property: turbulence_model
+    values:
+      k-epsilon: 0
+      k-omega: 1
+      SST: 2
+      laminar: 3
+```
+
+Add `turbulence_model` in `cases.csv` rows (for example `k-epsilon`, `SST`). The runner resolves via `values` and writes the mapped value into the scenario property before solve.
 
 ### Fluid Preset Switcher
 
