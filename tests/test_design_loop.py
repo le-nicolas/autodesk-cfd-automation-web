@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 from cfd_automation.design_loop import GenerativeDesignLoop
@@ -216,3 +217,48 @@ def test_metric_contract_validation_detects_missing_aliases(tmp_path: Path, monk
     assert result["ok"] is False
     assert len(result["missing_metrics"]) == 1
     assert result["missing_metrics"][0]["alias"] == "temp_max_c"
+
+
+def test_metric_contract_validation_rejects_stale_study_context(tmp_path: Path, monkeypatch) -> None:
+    project = _make_project(tmp_path)
+    runner = AutomationRunner(project)
+
+    cfg = runner.get_config()
+    cfg["study"]["template_model"] = "C:/study_a/model.cfdst"
+    cfg["metrics"] = [
+        {
+            "alias": "temp_max_c",
+            "section": "field variable results summary",
+            "quantity": "temp.max",
+            "unit": "C",
+        }
+    ]
+    runner.save_config(cfg)
+
+    monkeypatch.setattr(
+        runner,
+        "introspect",
+        lambda study_override=None: {
+            "data": {
+                "ok": True,
+                "study_path": "C:/study_b/model.cfdst",
+                "selected": {
+                    "design": "",
+                    "scenario": "",
+                    "summary_catalog": {
+                        "available": True,
+                        "warnings": [],
+                        "sections": [
+                            {
+                                "name": "field variable results summary",
+                                "quantities": [{"name": "temp.max", "unit": "C"}],
+                            }
+                        ],
+                    },
+                },
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="stale introspection context"):
+        runner.validate_metric_contract()

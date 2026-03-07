@@ -100,6 +100,7 @@ class AutomationRunner:
 
     def validate_metric_contract(self, *, study_override: str | None = None) -> dict[str, Any]:
         cfg = self.get_config()
+        study_cfg = cfg.get("study", {}) if isinstance(cfg.get("study", {}), dict) else {}
         metrics_cfg = cfg.get("metrics", []) if isinstance(cfg.get("metrics", []), list) else []
         if not metrics_cfg:
             return {
@@ -117,7 +118,37 @@ class AutomationRunner:
             detail = "; ".join(str(item) for item in errors[:3]) if errors else "Introspection returned no usable data."
             raise ValueError(f"Metric contract preflight failed during introspection: {detail}")
 
+        requested_study = str(study_override or study_cfg.get("template_model", "")).strip()
+        returned_study = str(data.get("study_path", "")).strip()
+        if requested_study and returned_study:
+            try:
+                req_norm = str(Path(requested_study).resolve()).lower()
+                ret_norm = str(Path(returned_study).resolve()).lower()
+            except Exception:
+                req_norm = requested_study.replace("\\", "/").lower()
+                ret_norm = returned_study.replace("\\", "/").lower()
+            if req_norm != ret_norm:
+                raise ValueError(
+                    "Metric contract preflight failed: stale introspection context detected. "
+                    f"Requested study={requested_study}, introspected study={returned_study}."
+                )
+
         selected = data.get("selected", {}) if isinstance(data.get("selected", {}), dict) else {}
+        requested_design = str(study_cfg.get("design_name", "")).strip()
+        requested_scenario = str(study_cfg.get("scenario_name", "")).strip()
+        selected_design = str(selected.get("design", "")).strip()
+        selected_scenario = str(selected.get("scenario", "")).strip()
+        if requested_design and selected_design and requested_design.lower() != selected_design.lower():
+            raise ValueError(
+                "Metric contract preflight failed: selected design mismatch. "
+                f"Requested design={requested_design}, introspected design={selected_design}."
+            )
+        if requested_scenario and selected_scenario and requested_scenario.lower() != selected_scenario.lower():
+            raise ValueError(
+                "Metric contract preflight failed: selected scenario mismatch. "
+                f"Requested scenario={requested_scenario}, introspected scenario={selected_scenario}."
+            )
+
         catalog = (
             selected.get("summary_catalog", {})
             if isinstance(selected.get("summary_catalog", {}), dict)
