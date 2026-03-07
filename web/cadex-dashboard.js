@@ -58,6 +58,12 @@
     return dt.toLocaleString();
   }
 
+  function num(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   function classifyLog(line) {
     const text = String(line || "").toLowerCase();
     if (!text) return "dim";
@@ -83,11 +89,12 @@
   }
 
   function renderLogs(lines) {
-    if (!ui.logContainer) return;
+    const liveLog = document.getElementById("logContainer");
+    if (!liveLog) return;
     const data = Array.isArray(lines) ? lines.slice(-180) : [];
     const pinnedToBottom =
-      ui.logContainer.scrollTop + ui.logContainer.clientHeight >= ui.logContainer.scrollHeight - 20;
-    ui.logContainer.innerHTML = "";
+      liveLog.scrollTop + liveLog.clientHeight >= liveLog.scrollHeight - 20;
+    liveLog.innerHTML = "";
     data.forEach((raw) => {
       const parts = splitStampedLog(raw);
       const row = document.createElement("div");
@@ -102,10 +109,10 @@
       msg.className = `log-msg ${classifyLog(parts.message)}`;
       msg.textContent = parts.message || String(raw || "");
       row.appendChild(msg);
-      ui.logContainer.appendChild(row);
+      liveLog.appendChild(row);
     });
     if (pinnedToBottom) {
-      ui.logContainer.scrollTop = ui.logContainer.scrollHeight;
+      liveLog.scrollTop = liveLog.scrollHeight;
     }
   }
 
@@ -133,8 +140,389 @@
     return status.running ? 1 : 0;
   }
 
-  async function refreshStatus() {
-    const [status, cfg] = await Promise.all([callApi("/api/status"), callApi("/api/config")]);
+  function setPageContent(page, markerId, html) {
+    const container = document.querySelector(`#page-${page} .content`);
+    if (!container) return;
+    container.innerHTML = html;
+  }
+
+  function objectiveSpec(config, rows) {
+    const ranking = Array.isArray(config && config.ranking) ? config.ranking : [];
+    if (ranking.length && ranking[0] && ranking[0].alias) {
+      return {
+        alias: String(ranking[0].alias),
+        goal: String(ranking[0].goal || "min").toLowerCase() === "max" ? "max" : "min",
+      };
+    }
+    for (const row of rows || []) {
+      const metrics = row && typeof row.metrics === "object" ? row.metrics : {};
+      const keys = Object.keys(metrics);
+      if (keys.length) return { alias: keys[0], goal: "min" };
+    }
+    return { alias: "", goal: "min" };
+  }
+
+  function pickBest(rows, spec) {
+    const ok = (rows || []).filter((row) => row && row.success);
+    if (!ok.length) return null;
+    if (!spec.alias) return ok[0];
+    const values = ok
+      .map((row) => ({ row, value: num(row.metrics && row.metrics[spec.alias]) }))
+      .filter((item) => item.value !== null);
+    if (!values.length) return ok[0];
+    values.sort((a, b) => (spec.goal === "max" ? b.value - a.value : a.value - b.value));
+    return values[0].row;
+  }
+
+  function renderMonitorPanel(status, latest, cfg, loopStatus) {
+    setPageContent(
+      "monitor",
+      "liveMonitorPanel",
+      `<div id="liveMonitorPanel">
+        <div class="grid-4">
+          <div class="stat-card"><div class="stat-label">Cases</div><div id="lmCases" class="stat-value">0</div><div id="lmCasesSub" class="stat-sub">-</div></div>
+          <div class="stat-card"><div class="stat-label">Pass Rate</div><div id="lmPass" class="stat-value">0%</div><div id="lmPassSub" class="stat-sub">-</div></div>
+          <div class="stat-card"><div class="stat-label">Best Objective</div><div id="lmBest" class="stat-value">-</div><div id="lmBestSub" class="stat-sub">-</div></div>
+          <div class="stat-card"><div class="stat-label">Loop</div><div id="lmLoop" class="stat-value">idle</div><div id="lmLoopSub" class="stat-sub">-</div></div>
+        </div>
+        <div class="grid-2" style="margin-top:16px;">
+          <div class="card"><div class="card-header"><div class="card-title">Active Case</div><div id="lmActiveSub" class="card-subtitle">-</div></div><div class="card-body"><div id="lmPhase" class="mono">phase: -</div></div></div>
+          <div class="card"><div class="card-header"><div class="card-title">Live Log</div><button id="liveLogClearBtn" class="btn btn-ghost" style="font-size:12px;">Clear</button></div><div class="card-body" style="padding:0;"><div class="log-container" id="logContainer"></div></div></div>
+        </div>
+        <div class="card" style="margin-top:16px;"><div class="card-header"><div class="card-title">Case Table</div><div id="lmTableMeta" class="card-subtitle">-</div></div><div style="overflow:auto;max-height:320px;"><table class="case-table"><thead><tr><th>case_id</th><th>status</th><th>phase</th><th>attempt</th><th>failure</th></tr></thead><tbody id="lmBody"></tbody></table></div></div>
+      </div>`
+    );
+    const rows = Array.isArray(latest && latest.case_results) ? latest.case_results : [];
+    const success = Number(latest && latest.successful_cases) || rows.filter((row) => row.success).length;
+    const failed = Number(latest && latest.failed_cases) || rows.filter((row) => !row.success).length;
+    const total = Number(latest && latest.selected_case_count) || rows.length || Number(status.selected_case_count || 0);
+    const pass = total > 0 ? Math.round((success / total) * 100) : 0;
+    const spec = objectiveSpec(cfg, rows);
+    const best = pickBest(rows, spec);
+    const runningRows =
+      Array.isArray(status.case_table) && status.case_table.length
+        ? status.case_table.filter((row) =>
+            ["running", "retrying"].includes(String(row.status || "").toLowerCase())
+          ).length
+        : 0;
+
+    document.getElementById("lmCases").textContent = String(success + failed);
+    document.getElementById("lmCasesSub").textContent = `of ${total || 0} selected`;
+    document.getElementById("lmPass").textContent = `${pass}%`;
+    document.getElementById("lmPassSub").textContent = `${success} pass / ${failed} fail`;
+    document.getElementById("lmBest").textContent =
+      best && spec.alias ? String(best.metrics && best.metrics[spec.alias]) : "-";
+    document.getElementById("lmBestSub").textContent = `${spec.alias || "objective"} · ${
+      best ? best.case_id : "-"
+    }`;
+    document.getElementById("lmLoop").textContent = loopStatus && loopStatus.running ? "running" : "idle";
+    document.getElementById("lmLoopSub").textContent = loopStatus && loopStatus.running ? `batch ${loopStatus.current_batch || 0}` : "no active loop";
+
+    document.getElementById("lmActiveSub").textContent = `${status.current_case || "-"} (${status.mode || "-"})`;
+    document.getElementById("lmPhase").textContent = `phase: ${status.current_phase || "startup"}`;
+    const tableRows =
+      Array.isArray(status.case_table) && status.case_table.length
+        ? status.case_table
+        : rows.map((row) => ({
+            case_id: row.case_id,
+            status: row.success ? "success" : "failed",
+            phase: row.success ? "complete" : "startup",
+            attempt: row.attempts || row.attempt || 1,
+            failure_type: row.failure_type || "",
+          }));
+    document.getElementById("lmTableMeta").textContent = `${tableRows.length} row(s) · ${
+      runningRows || (status.running ? 1 : 0)
+    } running`;
+    const body = document.getElementById("lmBody");
+    body.innerHTML = "";
+    if (!tableRows.length) {
+      body.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted)">No case rows yet.</td></tr>`;
+    } else {
+      tableRows.slice(0, 120).forEach((row) => {
+        const st = String(row.status || "queued").toLowerCase();
+        const badge =
+          st === "success"
+            ? "badge-pass"
+            : st === "failed"
+            ? "badge-fail"
+            : st === "running" || st === "retrying"
+            ? "badge-running"
+            : "badge-pending";
+        body.insertAdjacentHTML(
+          "beforeend",
+          `<tr><td class="mono">${String(row.case_id || "-")}</td><td><span class="badge ${badge}">${st}</span></td><td class="mono">${String(
+            row.phase || "-"
+          )}</td><td class="mono">${String(row.attempt || 1)}</td><td>${String(
+            row.failure_type || ""
+          )}</td></tr>`
+        );
+      });
+    }
+  }
+
+  function renderSimplePage(page, markerId, subtitle, title, dataHtml) {
+    setPageContent(
+      page,
+      markerId,
+      `<div id="${markerId}"><div class="card"><div class="card-header"><div class="card-title">${title}</div></div><div class="card-body">${dataHtml}</div></div></div>`
+    );
+    const sub = document.querySelector(`#page-${page} .topbar-subtitle`);
+    if (sub) sub.textContent = subtitle;
+  }
+
+  function renderLoopPanel(loopStatus, loopLatest, cfg) {
+    const summary =
+      loopStatus && loopStatus.last_summary && Object.keys(loopStatus.last_summary).length
+        ? loopStatus.last_summary
+        : loopLatest || {};
+    const objectiveAlias = summary.objective_alias || (cfg.ranking && cfg.ranking[0] && cfg.ranking[0].alias) || "objective";
+    const objectiveGoal = summary.objective_goal || "min";
+    const history = Array.isArray(summary.history) ? summary.history : [];
+    const rows = history
+      .slice(-10)
+      .map((batch) => {
+        const cases = Array.isArray(batch.cases) ? batch.cases : [];
+        const feasible = cases.filter((item) => item && item.constraints_pass).length;
+        const best = batch.best_case_in_batch || {};
+        return `<div class="preflight-item"><span class="mono">B${batch.batch_index || "-"}</span><span>${feasible}/${cases.length} feasible · best=${String(
+          best.case_id || "-"
+        )} · obj=${String(best.objective_value ?? "-")}</span></div>`;
+      })
+      .join("");
+    const preflight = summary.metric_contract_preflight || loopStatus.preflight || {};
+    const preflightHtml = !Object.keys(preflight).length
+      ? `<div class="card-subtitle">Preflight not run yet.</div>`
+      : preflight.skipped
+      ? `<div class="alert alert-info"><span>Preflight skipped (${String(preflight.reason || "unknown")})</span></div>`
+      : preflight.ok
+      ? `<div class="alert alert-success"><span>Preflight passed · checked=${String(
+          preflight.checked_metrics || 0
+        )} · available=${String(preflight.available_metric_pairs || 0)}</span></div>`
+      : `<div class="alert alert-warn"><span>Preflight failed.</span></div>`;
+    const best = summary.best_case || {};
+    renderSimplePage(
+      "loop",
+      "liveLoopPanel",
+      `${loopStatus.running ? "running" : "idle"} · ${objectiveGoal}(${objectiveAlias})`,
+      "Design Loop (Live)",
+      `<div class="summary-grid"><div class="summary-item"><div class="summary-key">loop_id</div><div class="summary-val">${String(
+        summary.loop_id || "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">batches</div><div class="summary-val">${String(
+        loopStatus.completed_batches || summary.completed_batches || 0
+      )}/${String(loopStatus.max_batches || summary.max_batches || "-")}</div></div><div class="summary-item"><div class="summary-key">best_case</div><div class="summary-val">${String(
+        best.case_id || "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">best_objective</div><div class="summary-val">${String(
+        best.objective_value ?? "-"
+      )}</div></div></div><div style="margin-top:12px;">${preflightHtml}</div><div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">${
+        rows || `<div class="card-subtitle">No batch history yet.</div>`
+      }</div>`
+    );
+  }
+
+  function renderCasesPanel(casesPayload, cfg) {
+    const rows = Array.isArray(casesPayload && casesPayload.rows) ? casesPayload.rows : [];
+    const columns = [];
+    rows.forEach((row) =>
+      Object.keys(row || {}).forEach((key) => {
+        if (!columns.includes(key)) columns.push(key);
+      })
+    );
+    const tableHead = columns.map((col) => `<th>${col}</th>`).join("");
+    const tableRows = rows
+      .slice(0, 240)
+      .map(
+        (row) =>
+          `<tr>${columns
+            .map((col) =>
+              col === "turbulence_model" && String(row[col] ?? "").trim()
+                ? `<td><span class="tag">${String(row[col])}</span></td>`
+                : `<td class="mono">${String(row[col] ?? "")}</td>`
+            )
+            .join("")}</tr>`
+      )
+      .join("");
+    renderSimplePage(
+      "cases",
+      "liveCasesPanel",
+      `cases.csv · ${rows.length} rows · study=${basename(cfg && cfg.study && cfg.study.template_model)}`,
+      "Case Matrix (Live)",
+      rows.length
+        ? `<div style="overflow:auto;max-height:560px;"><table class="case-table"><thead><tr>${tableHead}</tr></thead><tbody>${tableRows}</tbody></table></div>`
+        : `<div class="card-subtitle">No rows found in cases.csv.</div>`
+    );
+  }
+
+  function renderConfigPanel(cfg) {
+    const items = [
+      ["study_path", cfg.study && cfg.study.template_model],
+      ["design_name", cfg.study && cfg.study.design_name],
+      ["scenario_name", cfg.study && cfg.study.scenario_name],
+      ["solve.enabled", cfg.solve && cfg.solve.enabled],
+      ["cfd_executable", cfg.automation && cfg.automation.cfd_executable],
+      ["timeout_minutes", cfg.automation && cfg.automation.timeout_minutes],
+      ["max_retries", cfg.automation && cfg.automation.max_retries],
+      ["metrics", Array.isArray(cfg.metrics) ? cfg.metrics.length : 0],
+      ["criteria", Array.isArray(cfg.criteria) ? cfg.criteria.length : 0],
+      ["parameter_mappings", Array.isArray(cfg.parameter_mappings) ? cfg.parameter_mappings.length : 0],
+    ];
+    renderSimplePage(
+      "config",
+      "liveConfigPanel",
+      "study_config.yaml · live backend values",
+      "Study Config (Live)",
+      `<div class="summary-grid">${items
+        .map(
+          ([key, value]) =>
+            `<div class="summary-item"><div class="summary-key">${key}</div><div class="summary-val">${String(
+              value ?? "-"
+            )}</div></div>`
+        )
+        .join("")}</div>`
+    );
+  }
+
+  function renderResultsPanel(latest, cfg, loopLatest) {
+    const rows = Array.isArray(latest && latest.case_results) ? latest.case_results : [];
+    const spec = objectiveSpec(cfg, rows);
+    const best = pickBest(rows, spec);
+    const success = rows.filter((row) => row.success).length;
+    const failed = rows.length - success;
+    const ranked = rows.slice().sort((a, b) => {
+      if (Boolean(a.success) !== Boolean(b.success)) return a.success ? -1 : 1;
+      const av = spec.alias ? num(a.metrics && a.metrics[spec.alias]) : null;
+      const bv = spec.alias ? num(b.metrics && b.metrics[spec.alias]) : null;
+      if (av === null && bv !== null) return 1;
+      if (av !== null && bv === null) return -1;
+      if (av !== null && bv !== null) return spec.goal === "max" ? bv - av : av - bv;
+      return String(a.case_id || "").localeCompare(String(b.case_id || ""));
+    });
+    const rankRows = ranked
+      .slice(0, 220)
+      .map(
+        (row, idx) =>
+          `<tr><td class="mono">${idx + 1}</td><td class="mono">${String(row.case_id || "-")}</td><td class="mono">${String(
+            spec.alias ? row.metrics && row.metrics[spec.alias] : "-"
+          )}</td><td><span class="badge ${row.success ? "badge-pass" : "badge-fail"}">${
+            row.success ? "pass" : "fail"
+          }</span></td><td>${String(row.success ? "" : row.failure_type || row.failure_reason || "")}</td></tr>`
+      )
+      .join("");
+    const failCounts = {};
+    rows.forEach((row) => {
+      if (!row.success) {
+        const key = String(row.failure_type || "unknown");
+        failCounts[key] = (failCounts[key] || 0) + 1;
+      }
+    });
+    const failHtml = Object.keys(failCounts).length
+      ? Object.keys(failCounts)
+          .sort((a, b) => failCounts[b] - failCounts[a])
+          .map(
+            (key) =>
+              `<div class="preflight-item"><span class="mono">${key}</span><span>${failCounts[key]}</span></div>`
+          )
+          .join("")
+      : `<div class="card-subtitle">No failures in latest run.</div>`;
+    const loopHistory = Array.isArray(loopLatest && loopLatest.history) ? loopLatest.history : [];
+    const narration =
+      loopHistory.length &&
+      loopHistory[loopHistory.length - 1] &&
+      loopHistory[loopHistory.length - 1].narration &&
+      loopHistory[loopHistory.length - 1].narration.text
+        ? String(loopHistory[loopHistory.length - 1].narration.text)
+        : "No explanation captured yet.";
+    renderSimplePage(
+      "results",
+      "liveResultsPanel",
+      `${rows.length} cases · latest run ${latest && latest.run_id ? latest.run_id : "-"}`,
+      "Results (Live)",
+      `<div class="summary-grid"><div class="summary-item"><div class="summary-key">best_objective</div><div class="summary-val">${String(
+        best && spec.alias ? best.metrics && best.metrics[spec.alias] : "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">best_case</div><div class="summary-val">${String(
+        best ? best.case_id : "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">success</div><div class="summary-val">${success}</div></div><div class="summary-item"><div class="summary-key">failed</div><div class="summary-val">${failed}</div></div></div><div class="divider" style="margin:12px 0;"></div><div class="summary-key">llm_explanation</div><div class="summary-val">${narration}</div><div class="divider" style="margin:12px 0;"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div><div class="summary-key">ranked_cases</div><div style="overflow:auto;max-height:420px;"><table class="rank-table"><thead><tr><th>Rank</th><th>Case</th><th>${String(
+        spec.alias || "objective"
+      )}</th><th>Status</th><th>Failure</th></tr></thead><tbody>${rankRows || `<tr><td colspan="5" style="color:var(--text-muted)">No rows yet.</td></tr>`}</tbody></table></div></div><div><div class="summary-key">failure_summary</div>${failHtml}</div></div>`
+    );
+  }
+
+  function renderSurrogatePanel(statusPayload, coveragePayload) {
+    const result = statusPayload && statusPayload.result ? statusPayload.result : {};
+    const coverage = coveragePayload && coveragePayload.result ? coveragePayload.result : {};
+    const perFeature = coverage && coverage.per_feature ? coverage.per_feature : {};
+    const bars = Object.entries(perFeature).length
+      ? Object.entries(perFeature)
+          .sort((a, b) => Number(b[1]) - Number(a[1]))
+          .map(([name, value]) => {
+            const pct = Math.max(0, Math.min(100, Number(value) * 100));
+            return `<div style="margin-bottom:8px;"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>${name}</span><span class="mono">${pct.toFixed(
+              1
+            )}%</span></div><div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div></div>`;
+          })
+          .join("")
+      : `<div class="card-subtitle">No coverage data yet.</div>`;
+    renderSimplePage(
+      "surrogate",
+      "liveSurrogatePanel",
+      "live surrogate status",
+      "Surrogate (Live)",
+      `<div class="summary-grid"><div class="summary-item"><div class="summary-key">model</div><div class="summary-val">${String(
+        result.model_name || "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">target_alias</div><div class="summary-val">${String(
+        result.target_alias || "-"
+      )}</div></div><div class="summary-item"><div class="summary-key">row_count</div><div class="summary-val">${String(
+        result.row_count || 0
+      )}</div></div><div class="summary-item"><div class="summary-key">best_r2</div><div class="summary-val">${
+        result.best_r2 !== undefined && result.best_r2 !== null ? Number(result.best_r2).toFixed(4) : "-"
+      }</div></div></div><div style="margin-top:12px;">${
+        result.ready
+          ? `<div class="alert alert-success"><span>Surrogate ready for predict/validate.</span></div>`
+          : `<div class="alert alert-warn"><span>Surrogate not ready yet.</span></div>`
+      }</div><div class="divider" style="margin:12px 0;"></div>${bars}`
+    );
+  }
+
+  function showLiveError(err) {
+    const message = err && err.message ? String(err.message) : "API unavailable";
+    if (ui.monitorSubtitle) ui.monitorSubtitle.textContent = `API unavailable: ${message}`;
+    if (ui.navRunningBadge) ui.navRunningBadge.textContent = "0";
+    if (ui.activeStudyStatus) ui.activeStudyStatus.textContent = "API unavailable";
+    renderMonitorPanel(
+      { running: false, mode: "", selected_case_count: 0, case_table: [], logs: [] },
+      { case_results: [], successful_cases: 0, failed_cases: 0, selected_case_count: 0 },
+      { ranking: [], study: {} },
+      { running: false, current_batch: 0 }
+    );
+    const errorHtml = `<div class="alert alert-warn"><span>Backend API is unavailable. Start the CADEX server (` + "`python app.py`" + `) and refresh.</span></div>`;
+    renderSimplePage("loop", "liveLoopPanel", "api unavailable", "Design Loop (Live)", errorHtml);
+    renderSimplePage("cases", "liveCasesPanel", "api unavailable", "Case Matrix (Live)", errorHtml);
+    renderSimplePage("config", "liveConfigPanel", "api unavailable", "Study Config (Live)", errorHtml);
+    renderSimplePage("results", "liveResultsPanel", "api unavailable", "Results (Live)", errorHtml);
+    renderSimplePage("surrogate", "liveSurrogatePanel", "api unavailable", "Surrogate (Live)", errorHtml);
+    renderLogs([]);
+  }
+
+  async function refreshLive() {
+    const [
+      status,
+      cfg,
+      casesPayload,
+      latestRun,
+      loopStatus,
+      loopLatest,
+      surrogateStatus,
+      surrogateCoverage,
+    ] = await Promise.all([
+      callApi("/api/status"),
+      callApi("/api/config"),
+      callApi("/api/cases"),
+      callApi("/api/latest-run"),
+      callApi("/api/design-loop/status"),
+      callApi("/api/design-loop/latest"),
+      callApi("/api/surrogate/status"),
+      callApi("/api/surrogate/coverage"),
+    ]);
+
     if (ui.monitorSubtitle) ui.monitorSubtitle.textContent = summarizeMode(status);
     if (ui.navRunningBadge) ui.navRunningBadge.textContent = String(countRunningCases(status));
     if (ui.activeStudyName) {
@@ -147,7 +535,19 @@
           : "";
       ui.activeStudyName.textContent = basename(studyPath);
     }
-    if (ui.activeStudyStatus) ui.activeStudyStatus.textContent = status.running ? "Run active" : "Idle";
+    if (ui.activeStudyStatus) {
+      ui.activeStudyStatus.textContent = loopStatus.running
+        ? "Design loop running"
+        : status.running
+        ? "Run active"
+        : "Idle";
+    }
+    renderMonitorPanel(status, latestRun, cfg, loopStatus);
+    renderLoopPanel(loopStatus, loopLatest, cfg);
+    renderCasesPanel(casesPayload, cfg);
+    renderConfigPanel(cfg);
+    renderResultsPanel(latestRun, cfg, loopLatest);
+    renderSurrogatePanel(surrogateStatus, surrogateCoverage);
     renderLogs(status.logs || []);
   }
 
@@ -304,6 +704,15 @@
         refreshHistory().catch(() => {});
       });
     }
+    document.addEventListener("click", (event) => {
+      const clearBtn =
+        event && event.target && event.target.closest
+          ? event.target.closest("#liveLogClearBtn")
+          : null;
+      if (!clearBtn) return;
+      const log = document.getElementById("logContainer");
+      if (log) log.innerHTML = "";
+    });
   }
 
   function switchPage(name, el) {
@@ -321,12 +730,22 @@
 
   async function boot() {
     bindActions();
-    await Promise.all([refreshStatus(), refreshHistory()]);
+    const init = await Promise.allSettled([refreshLive(), refreshHistory()]);
+    if (init[0] && init[0].status === "rejected") {
+      showLiveError(init[0].reason);
+    }
+    if (init[1] && init[1].status === "rejected" && ui.historyRunMeta) {
+      ui.historyRunMeta.textContent = "History unavailable";
+    }
     setInterval(() => {
-      refreshStatus().catch(() => {});
+      refreshLive().catch((err) => {
+        showLiveError(err);
+      });
     }, 2000);
     setInterval(() => {
-      refreshHistory().catch(() => {});
+      refreshHistory().catch(() => {
+        if (ui.historyRunMeta) ui.historyRunMeta.textContent = "History unavailable";
+      });
     }, 20000);
   }
 
