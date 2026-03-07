@@ -5,6 +5,7 @@ CADEX is a local automation layer for Autodesk CFD studies.
 - It turns manual CFD sweeps into reproducible run pipelines.
 - It has a local web console (`http://127.0.0.1:5055`) for config, cases, runs, logs, and outputs.
 - It supports manual cases, LLM case generation, Bayesian design loops, and surrogate predict/validate mode.
+- It shows explicit optimizer mode in Design Loop status (`bayesian_gp` vs `random_fallback`).
 - It is built for Windows + Autodesk CFD (not Linux/macOS).
 - It has been run end-to-end on `Kani yawa.cfdst` (real run IDs and outputs below).
 
@@ -41,6 +42,27 @@ Quick evidence:
 | Worst feasible case in same loop | `LOOP_B01_C003` (`temp_max_c=11633900000`) |
 | Feasible improvement | `41.01%` |
 
+### Surrogate Status (Real Data)
+
+Recorded on **March 7, 2026** from `runtime/surrogate/metadata.json`:
+
+- `trained: true`
+- `row_count: 50`
+- `ready: true`
+- `model_name: gradient_boosting`
+- `best_r2: 0.9854`
+
+This means predict/validate mode is now trained on real historical CFD runs (not theoretical only).
+
+### Bayesian Mode Guardrail
+
+Design Loop now reports optimizer mode directly in the dashboard:
+
+- `Optimizer: bayesian_gp` when `scikit-optimize` is available
+- `Optimizer: random_fallback` with a visible `WARNING` when unavailable
+
+So fallback is no longer silent.
+
 ### Demo Outputs
 
 CFD output screenshot (Kani Yawa):
@@ -60,6 +82,7 @@ Pressure chart from run outputs:
 - Run all / failed / changed cases from `config/cases.csv`
 - Generate cases from natural language (Ollama or Groq)
 - Run closed-loop Bayesian design optimization
+- See live optimizer mode/warning in Design Loop status
 - Train surrogate model from historical runs
 - Predict thousands of combinations instantly, then validate top-N with real CFD
 - Export ranked CSV, charts, screenshots, and report HTML/Markdown
